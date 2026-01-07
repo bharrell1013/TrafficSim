@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Traffic Flow Laboratory</title>
+    <meta
+      name="description"
+      content="Simulate emergent traffic patterns on a circular highway with different driver personalities"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <header class="app-header">
+        <button id="hamburger-btn" class="hamburger-btn" aria-label="Toggle Controls">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+        <h1>🚗 Traffic Flow Laboratory</h1>
+        <p class="tagline">
+          Watch emergent traffic patterns unfold with realistic driver behaviors
+        </p>
+      </header>
+
+      <aside id="controls-container" class="sidebar controls-sidebar"></aside>
+
+      <main class="app-layout">
+        <section class="simulation-area">
+          <canvas id="simulation-canvas"></canvas>
+        </section>
+
+        <aside id="dashboard-container" class="sidebar"></aside>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

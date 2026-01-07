@@ -18,6 +18,13 @@ export class Car {
     driverType: DriverType,
     targetExit: number | null = null
   ) {
+    const goalMultipliers: Record<DriverType, number> = {
+      A: 1.0,
+      B: 0.5,
+      C: 1.5,
+    };
+    const baseGoal = Math.PI * 2 * (1 + Math.random() * 2);
+
     this.state = {
       id: `car_${carIdCounter++}`,
       position,
@@ -27,13 +34,21 @@ export class Car {
       targetExit,
       lapsCompleted: 0,
       driverType,
+      isYielding: false,
+      yieldTarget: null,
+      minTravelDistance: baseGoal * goalMultipliers[driverType],
+      distanceTraveled: 0,
     };
     this.driver = { ...DRIVER_PROFILES[driverType] };
     this.targetLane = lane;
   }
 
   update(dt: number, leadCar: Car | null, speedLimit: number): void {
-    const desiredSpeed = speedLimit * this.driver.desiredSpeedMultiplier;
+    let desiredSpeed = speedLimit * this.driver.desiredSpeedMultiplier;
+
+    if (this.state.isYielding) {
+      desiredSpeed *= 0.6;
+    }
 
     let gap = 1000;
     let approachingRate = 0;
@@ -60,7 +75,9 @@ export class Car {
     this.state.velocity = Math.max(0, this.state.velocity);
 
     const angularVelocity = this.state.velocity / 50;
-    this.state.position += angularVelocity * dt;
+    const deltaPosition = angularVelocity * dt;
+    this.state.position += deltaPosition;
+    this.state.distanceTraveled += Math.abs(deltaPosition);
 
     if (this.state.position >= Math.PI * 2) {
       this.state.position -= Math.PI * 2;
@@ -68,7 +85,7 @@ export class Car {
     }
 
     if (this.isChangingLane) {
-      this.laneChangeProgress += dt * 2;
+      this.laneChangeProgress += dt * 1.5;
       if (this.laneChangeProgress >= 1) {
         this.state.lane = this.targetLane;
         this.isChangingLane = false;
@@ -100,5 +117,9 @@ export class Car {
 
   getSpeedRatio(speedLimit: number): number {
     return Math.min(1, this.state.velocity / speedLimit);
+  }
+
+  hasReachedGoal(): boolean {
+    return this.state.distanceTraveled >= this.state.minTravelDistance;
   }
 }

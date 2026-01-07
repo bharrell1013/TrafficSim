@@ -15,11 +15,13 @@ export class Simulation {
   config: SimulationConfig;
   ramps: RampConfig[] = [];
   rampCars: RampCar[] = [];
+  entranceQueues: Map<number, RampCar[]> = new Map();
 
   private running: boolean = false;
   private lastTime: number = 0;
   private accumulator: number = 0;
   private readonly fixedDt: number = 1 / 60;
+  private readonly minMergeGap: number = 0.12;
 
   private exitedCars: number[] = [];
   private allowedDriverTypes: Set<DriverType> = new Set(["A", "B", "C"]);
@@ -48,6 +50,7 @@ export class Simulation {
     this.cars.clear();
     this.exitedCars = [];
     this.rampCars = [];
+    this.entranceQueues.clear();
   }
 
   private loop = (): void => {
@@ -87,7 +90,7 @@ export class Simulation {
 
       car.update(dt, neighbors.currentLeader, this.config.speedLimit);
 
-      if (!car.isChangingLane && Math.random() < 0.02) {
+      if (!car.isChangingLane && Math.random() < 0.03) {
         const gaps = {
           current: neighbors.currentLeader
             ? car.calculateGapTo(neighbors.currentLeader)
@@ -106,7 +109,8 @@ export class Simulation {
           neighbors,
           gaps,
           this.config.speedLimit,
-          this.config.numLanes
+          this.config.numLanes,
+          car.hasReachedGoal()
         );
 
         if (decision && this.isLaneChangeValid(car, decision)) {
@@ -115,7 +119,9 @@ export class Simulation {
       }
     }
 
+    this.updateYieldingBehavior();
     this.handleRamps(dt);
+    this.processEntranceQueues(dt);
     this.updateRampCars(dt);
     this.pruneExitedCars();
   }
@@ -123,47 +129,150 @@ export class Simulation {
   private isLaneChangeValid(car: Car, direction: "left" | "right"): boolean {
     const newLane =
       direction === "left" ? car.state.lane - 1 : car.state.lane + 1;
-    return newLane >= 0 && newLane < this.config.numLanes;
+    if (newLane < 0 || newLane >= this.config.numLanes) return false;
+
+    const carsInTargetLane = this.spatialHash.getNearby(
+      car.state.position,
+      newLane,
+      2
+    );
+    for (const other of carsInTargetLane) {
+      if (other.state.id === car.state.id) continue;
+      let gap = Math.abs(other.state.position - car.state.position);
+      if (gap > Math.PI) gap = Math.PI * 2 - gap;
+      if (gap < 0.15) return false;
+    }
+    return true;
+  }
+
+  private updateYieldingBehavior(): void {
+    for (const car of this.cars.values()) {
+      car.state.isYielding = false;
+      car.state.yieldTarget = null;
+    }
+
+    for (const ramp of this.ramps) {
+      if (ramp.type !== "entrance") continue;
+
+      const queue = this.entranceQueues.get(ramp.id);
+      if (!queue || queue.length === 0) continue;
+
+      const outerLane = this.config.numLanes - 1;
+      const nearbyCars = this.spatialHash.getNearby(ramp.angle, outerLane, 4);
+
+      for (const car of nearbyCars) {
+        if (car.state.lane !== outerLane) continue;
+
+        let distToRamp = ramp.angle - car.state.position;
+        if (distToRamp < 0) distToRamp += Math.PI * 2;
+        if (distToRamp > Math.PI) continue;
+
+        if (distToRamp < 0.5 && distToRamp > 0.1) {
+          const yieldChance = car.driver.yieldProbability;
+          if (Math.random() < yieldChance * 0.1) {
+            car.state.isYielding = true;
+            car.state.yieldTarget = ramp.id;
+          }
+        }
+      }
+    }
   }
 
   private handleRamps(dt: number): void {
     for (const ramp of this.ramps) {
       if (ramp.type === "entrance") {
         if (Math.random() < ramp.flowRate * dt) {
-          this.startSpawnAnimation(ramp);
+          this.addToEntranceQueue(ramp);
         }
       }
     }
   }
 
-  private startSpawnAnimation(ramp: RampConfig): void {
+  private addToEntranceQueue(ramp: RampConfig): void {
     const types: DriverType[] = Array.from(this.allowedDriverTypes);
     if (types.length === 0) return;
 
     const driverType = types[Math.floor(Math.random() * types.length)];
 
-    const nearby = this.spatialHash.getNearby(ramp.angle, ramp.lane, 2);
-    const hasSpace = nearby.every((car) => {
-      let gap = Math.abs(car.state.position - ramp.angle);
-      if (gap > Math.PI) gap = Math.PI * 2 - gap;
-      return gap > 0.15;
-    });
+    if (!this.entranceQueues.has(ramp.id)) {
+      this.entranceQueues.set(ramp.id, []);
+    }
 
-    if (!hasSpace) return;
+    const queue = this.entranceQueues.get(ramp.id)!;
+    const maxQueueSize = 5;
+    if (queue.length >= maxQueueSize) return;
 
-    this.rampCars.push({
+    const newCar: RampCar = {
       id: `ramp_car_${this.rampCarIdCounter++}`,
       rampId: ramp.id,
       progress: 0,
       driverType,
       entering: true,
-    });
+      queuePosition: queue.length,
+      waitingToMerge: true,
+    };
+
+    queue.push(newCar);
+    this.rampCars.push(newCar);
+  }
+
+  private processEntranceQueues(dt: number): void {
+    for (const [rampId, queue] of this.entranceQueues) {
+      if (queue.length === 0) continue;
+
+      const ramp = this.ramps.find((r) => r.id === rampId);
+      if (!ramp) continue;
+
+      const frontCar = queue[0];
+      if (!frontCar.waitingToMerge) continue;
+
+      const canMerge = this.checkMergeGap(ramp);
+
+      if (canMerge) {
+        frontCar.waitingToMerge = false;
+        frontCar.progress = 0;
+        queue.shift();
+
+        for (let i = 0; i < queue.length; i++) {
+          queue[i].queuePosition = i;
+        }
+      }
+    }
+
+    for (const rampCar of this.rampCars) {
+      if (rampCar.waitingToMerge && rampCar.entering) {
+        rampCar.progress = Math.min(
+          rampCar.progress + dt * 1.0,
+          0.4 + rampCar.queuePosition * 0.12
+        );
+      }
+    }
+  }
+
+  private checkMergeGap(ramp: RampConfig): boolean {
+    const outerLane = this.config.numLanes - 1;
+    const nearbyCars = this.spatialHash.getNearby(ramp.angle, outerLane, 3);
+
+    for (const car of nearbyCars) {
+      if (car.state.lane !== outerLane) continue;
+
+      let gap = Math.abs(car.state.position - ramp.angle);
+      if (gap > Math.PI) gap = Math.PI * 2 - gap;
+
+      if (gap < this.minMergeGap) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private updateRampCars(dt: number): void {
     const completedCars: RampCar[] = [];
 
     for (const rampCar of this.rampCars) {
+      if (rampCar.waitingToMerge) continue;
+
       rampCar.progress += dt * 2;
 
       if (rampCar.progress >= 1) {
@@ -217,6 +326,8 @@ export class Simulation {
             progress: 0,
             driverType: car.state.driverType,
             entering: false,
+            queuePosition: 0,
+            waitingToMerge: false,
           });
         }
       }

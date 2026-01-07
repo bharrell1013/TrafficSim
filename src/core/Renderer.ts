@@ -159,15 +159,27 @@ export class Renderer {
         config.baseRadius + (config.numLanes - 0.5) * config.laneWidth;
       const rampLength = 60;
 
-      const progress = rampCar.entering
-        ? rampCar.progress
-        : 1 - rampCar.progress;
-      const radius = outerRadius + rampLength * (1 - progress);
+      let radius: number;
+      if (rampCar.waitingToMerge && rampCar.entering) {
+        const queueOffset = rampCar.queuePosition * 15;
+        radius =
+          outerRadius +
+          rampLength -
+          rampCar.progress * rampLength +
+          queueOffset;
+      } else {
+        const progress = rampCar.entering
+          ? rampCar.progress
+          : 1 - rampCar.progress;
+        radius = outerRadius + rampLength * (1 - progress);
+      }
 
       const x = this.centerX + Math.cos(ramp.angle) * radius;
       const y = this.centerY + Math.sin(ramp.angle) * radius;
 
-      this.drawCarShape(x, y, ramp.angle, rampCar.driverType, config, 1.0);
+      const rampRotation = ramp.angle + Math.PI / 2;
+
+      this.drawCarShape(x, y, rampRotation, rampCar.driverType, config, 1.0);
     }
   }
 

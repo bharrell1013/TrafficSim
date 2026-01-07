@@ -51,8 +51,10 @@ export class SpatialHash {
     currentFollower: Car | null;
     leftLeader: Car | null;
     leftFollower: Car | null;
+    leftAdjacent: Car | null;
     rightLeader: Car | null;
     rightFollower: Car | null;
+    rightAdjacent: Car | null;
   } {
     const pos = car.state.position;
     const lane = car.state.lane;
@@ -67,8 +69,10 @@ export class SpatialHash {
       currentFollower: this.findFollower(car, currentLane),
       leftLeader: this.findLeader(car, leftLane),
       leftFollower: this.findFollower(car, leftLane),
+      leftAdjacent: this.findAdjacent(car, leftLane),
       rightLeader: this.findLeader(car, rightLane),
       rightFollower: this.findFollower(car, rightLane),
+      rightAdjacent: this.findAdjacent(car, rightLane),
     };
   }
 
@@ -110,5 +114,22 @@ export class SpatialHash {
     }
 
     return follower;
+  }
+
+  private findAdjacent(car: Car, candidates: Car[]): Car | null {
+    const safeGapThreshold = 0.12;
+
+    for (const candidate of candidates) {
+      if (candidate.state.id === car.state.id) continue;
+
+      let gap = Math.abs(candidate.state.position - car.state.position);
+      if (gap > Math.PI) gap = Math.PI * 2 - gap;
+
+      if (gap < safeGapThreshold) {
+        return candidate;
+      }
+    }
+
+    return null;
   }
 }

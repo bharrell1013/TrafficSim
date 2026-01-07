@@ -12,6 +12,10 @@ export interface CarState {
   targetExit: number | null;
   lapsCompleted: number;
   driverType: DriverType;
+  isYielding: boolean;
+  yieldTarget: number | null;
+  minTravelDistance: number;
+  distanceTraveled: number;
 }
 
 export type DriverType = "A" | "B" | "C";
@@ -24,6 +28,7 @@ export interface DriverProfile {
   comfortableBraking: number;
   politeness: number;
   gapAcceptance: number;
+  yieldProbability: number;
 }
 
 export interface LaneConfig {
@@ -45,6 +50,8 @@ export interface RampCar {
   progress: number;
   driverType: DriverType;
   entering: boolean;
+  queuePosition: number;
+  waitingToMerge: boolean;
 }
 
 export interface SimulationConfig {
@@ -72,6 +79,7 @@ export const DRIVER_PROFILES: Record<DriverType, DriverProfile> = {
     comfortableBraking: 2.0,
     politeness: 0.5,
     gapAcceptance: 1.0,
+    yieldProbability: 0.7,
   },
   B: {
     type: "B",
@@ -81,6 +89,7 @@ export const DRIVER_PROFILES: Record<DriverType, DriverProfile> = {
     comfortableBraking: 3.0,
     politeness: -0.2,
     gapAcceptance: 0.5,
+    yieldProbability: 0,
   },
   C: {
     type: "C",
@@ -90,5 +99,6 @@ export const DRIVER_PROFILES: Record<DriverType, DriverProfile> = {
     comfortableBraking: 1.5,
     politeness: 0.8,
     gapAcceptance: 2.0,
+    yieldProbability: 0.4,
   },
 };

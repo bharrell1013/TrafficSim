@@ -30,6 +30,15 @@ controls.setPlacementModeCallback((mode) => {
   canvas.style.cursor = mode === "none" ? "default" : "crosshair";
 });
 
+function renderCurrentState(): void {
+  renderer.render(
+    Array.from(simulation.cars.values()),
+    simulation.config,
+    simulation.ramps,
+    simulation.rampCars
+  );
+}
+
 canvas.addEventListener("click", (event) => {
   if (currentPlacementMode === "none") return;
 
@@ -44,6 +53,7 @@ canvas.addEventListener("click", (event) => {
 
   simulation.addRamp(currentPlacementMode, angle);
   controls.clearPlacementMode();
+  renderCurrentState();
 });
 
 simulation.onUpdate = (cars, metrics, rampCars) => {

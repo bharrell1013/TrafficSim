@@ -43,6 +43,8 @@ export class Car {
       yieldTarget: null,
       minTravelDistance: baseGoal * goalMultipliers[driverType],
       distanceTraveled: 0,
+      stuckTime: 0,
+      lastLaneChangeTime: -1000,
     };
     this.driver = { ...DRIVER_PROFILES[driverType] };
     this.targetLane = lane;
@@ -50,50 +52,65 @@ export class Car {
 
   update(
     dt: number,
-    leadCar: Car | null,
+    currentGap: number,
+    approachingRate: number,
     speedLimit: number,
-    radius: number,
-    carLength: number
+    radius: number
   ): void {
     let desiredSpeed = speedLimit * this.driver.desiredSpeedMultiplier;
 
+    // Adjust desired speed based on DriverType quirks
+    if (this.state.driverType === "A") {
+      // Aggressive drivers want to go faster if open road
+      if (currentGap > 100) desiredSpeed *= 1.1;
+    } else if (this.state.driverType === "C") {
+      // Slow drivers fluctuate
+      desiredSpeed *= 0.9 + Math.random() * 0.2;
+    }
+
     if (this.state.isYielding) {
-      desiredSpeed *= 0.6;
+      desiredSpeed *= 0.5;
     }
 
-    let gap = 1000;
-    let approachingRate = 0;
-
-    if (leadCar) {
-      gap = this.calculateGapTo(leadCar, radius, carLength);
-      approachingRate = this.state.velocity - leadCar.state.velocity;
+    // Update Stuck Time
+    if (this.state.velocity < desiredSpeed * 0.6 && currentGap < 50) {
+      this.state.stuckTime += dt;
+    } else {
+      this.state.stuckTime = Math.max(0, this.state.stuckTime - dt * 2);
     }
+
+    // IDM Calculation
+    let gap = currentGap;
+
+    // Tuning IDM for "Arcade" feel but keeping physics
+    // We artificially mask the gap for aggressive drivers to make them tailgait more
+    let perceivedGap = gap;
+    if (this.state.driverType === "A") perceivedGap *= 1.2;
 
     this.state.acceleration = calculateIDMAcceleration(
       this.state.velocity,
       desiredSpeed,
-      gap,
+      perceivedGap,
       approachingRate,
       this.driver
     );
 
-    // Emergency braking if very close
+    // Hard clamps for collision avoidance (The "Don't Hit Stuff" rule)
     if (gap < 5) {
-      this.state.acceleration = Math.min(-15, this.state.acceleration);
-    } else {
-      this.state.acceleration = Math.max(
-        -8,
-        Math.min(this.state.acceleration, this.driver.maxAcceleration)
-      );
+      this.state.acceleration = -this.driver.maxAcceleration * 2; // Emergency brake
+      this.state.velocity = 0; // Force stop if literally touching
+    } else if (gap < 15) {
+      this.state.acceleration = Math.min(this.state.acceleration, -2); // Strong braking
     }
 
+    // Acceleration smoothing
     this.state.velocity += this.state.acceleration * dt;
     this.state.velocity = Math.max(0, this.state.velocity);
 
     const angularVelocity = this.state.velocity / radius;
     const deltaPosition = angularVelocity * dt;
     this.state.position += deltaPosition;
-    this.state.distanceTraveled += Math.abs(deltaPosition * radius); // Linear distance
+    this.state.distanceTraveled += Math.abs(deltaPosition * radius);
 
     if (this.state.position >= Math.PI * 2) {
       this.state.position -= Math.PI * 2;
@@ -101,11 +118,16 @@ export class Car {
     }
 
     if (this.isChangingLane) {
-      this.laneChangeProgress += dt * 1.5;
+      // Aggressive drivers change lanes faster
+      const changeSpeed = this.state.driverType === "A" ? 2.5 : 1.5;
+      this.laneChangeProgress += dt * changeSpeed;
+
       if (this.laneChangeProgress >= 1) {
         this.state.lane = this.targetLane;
         this.isChangingLane = false;
         this.laneChangeProgress = 0;
+        this.state.lastLaneChangeTime = performance.now();
+        this.state.stuckTime = 0; // Reset frustration
       }
     }
   }
@@ -113,16 +135,16 @@ export class Car {
   calculateGapTo(other: Car, radius: number, carLength: number): number {
     let deltaAngle = other.state.position - this.state.position;
     if (deltaAngle < 0) deltaAngle += Math.PI * 2;
-
-    // Convert angular gap to linear distance
     const linearDist = deltaAngle * radius;
-
-    // Subtract car length to get bumper-to-bumper gap
     return Math.max(0, linearDist - carLength);
   }
 
   startLaneChange(direction: "left" | "right"): void {
     if (this.isChangingLane) return;
+
+    // Cooldown check (prevent rapid switching)
+    const now = performance.now();
+    if (now - this.state.lastLaneChangeTime < 2000) return; // 2s cooldown
 
     this.isChangingLane = true;
     this.laneChangeProgress = 0;

@@ -16,6 +16,8 @@ export interface CarState {
   yieldTarget: number | null;
   minTravelDistance: number;
   distanceTraveled: number;
+  stuckTime: number;
+  lastLaneChangeTime: number;
 }
 
 export type DriverType = "A" | "B" | "C";

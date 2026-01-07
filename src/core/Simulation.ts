@@ -7,7 +7,6 @@ import type {
   SimulationMetrics,
   DriverType,
 } from "../models/types";
-import { shouldChangeLane } from "../physics/MOBIL";
 
 export class Simulation {
   cars: Map<string, Car> = new Map();
@@ -16,11 +15,11 @@ export class Simulation {
   ramps: RampConfig[] = [];
   rampCars: RampCar[] = [];
   entranceQueues: Map<number, RampCar[]> = new Map();
+  lastMergeTimes: Map<number, number> = new Map();
 
   private running: boolean = false;
   private lastTime: number = 0;
   private accumulator: number = 0;
-  private readonly fixedDt: number = 1 / 60;
   private readonly fixedDt: number = 1 / 60;
 
   private exitedCars: number[] = [];
@@ -30,6 +29,7 @@ export class Simulation {
   onUpdate:
     | ((cars: Car[], metrics: SimulationMetrics, rampCars: RampCar[]) => void)
     | null = null;
+  onStructureChange: (() => void) | null = null;
 
   constructor(config: SimulationConfig) {
     this.config = config;
@@ -120,117 +120,222 @@ export class Simulation {
         }
       }
 
-      const laneRadius =
-        this.config.baseRadius + car.state.lane * this.config.laneWidth;
+      // Helper to calculate gap and rate to a specific car
+      const getGapAndRate = (target: Car | null, laneIdx: number) => {
+        if (!target) return { gap: 1000, rate: 0 };
+        const laneRadius =
+          this.config.baseRadius + laneIdx * this.config.laneWidth;
+        const gap = car.calculateGapTo(
+          target,
+          laneRadius,
+          this.config.carLength
+        );
+        const rate = car.state.velocity - target.state.velocity;
+        return { gap, rate };
+      };
+
+      // 1. Current Lane Physics
+      const currentLaneRadius =
+        this.config.baseRadius + currentLaneId * this.config.laneWidth;
+
+      const currentPhysics = getGapAndRate(leader, currentLaneId);
+
+      // 2. Target Lane Physics (if changing lanes)
+      let effectiveGap = currentPhysics.gap;
+      let effectiveRate = currentPhysics.rate;
+
+      if (car.isChangingLane) {
+        const t = car.laneChangeProgress;
+        const targetLaneId = car.targetLane;
+        const targetList = laneCars.get(targetLaneId)!;
+
+        // Find leader in target lane
+        let targetLeader: Car | null = null;
+
+        let minDiff = Infinity;
+        for (const other of targetList) {
+          if (other === car) continue;
+          let diff = other.state.position - car.state.position;
+          if (diff < 0) diff += Math.PI * 2;
+          if (diff < minDiff) {
+            minDiff = diff;
+            targetLeader = other;
+          }
+        }
+
+        const targetPhysics = getGapAndRate(targetLeader, targetLaneId);
+
+        // Interpolate
+        effectiveGap = currentPhysics.gap * (1 - t) + targetPhysics.gap * t;
+        effectiveRate = currentPhysics.rate * (1 - t) + targetPhysics.rate * t;
+
+        // Safety Override: purely use target if we are mostly there
+        if (t > 0.5) {
+          effectiveGap = targetPhysics.gap;
+          effectiveRate = targetPhysics.rate;
+        }
+      }
 
       car.update(
         dt,
-        leader,
+        effectiveGap,
+        effectiveRate,
         this.config.speedLimit,
-        laneRadius,
-        this.config.carLength
+        currentLaneRadius
       );
 
-      if (!car.isChangingLane && Math.random() < 0.1) {
-        // Check for lane changes...
-        // We need neighbors for MOBIL
-        // Simplified neighbor finding:
-        const getLeaderFollower = (laneId: number) => {
-          const targetList = laneCars.get(laneId);
-          if (!targetList || targetList.length === 0)
-            return { leader: null, follower: null };
+      if (!car.isChangingLane) {
+        // --- Simplified Driver Logic ---
 
-          // Find insertion point
-          let bestIdx = 0;
-          // Since it's sorted 0..2PI
-          while (
-            bestIdx < targetList.length &&
-            targetList[bestIdx].state.position < car.state.position
+        let wantToChange = false;
+        let preferredDirection: "left" | "right" | null = null;
+
+        // 1. Stuck Logic (Frustration)
+        // Aggressive drivers change if slightly stuck. Normal/Slow if really stuck.
+        const frustrationThreshold =
+          car.state.driverType === "A"
+            ? 1.0
+            : car.state.driverType === "B"
+            ? 3.0
+            : 10.0;
+
+        if (car.state.stuckTime > frustrationThreshold) {
+          wantToChange = true;
+          // Aggressive prefers left (inner), others just want out
+          if (car.state.driverType === "A") {
+            preferredDirection = "left";
+          } else {
+            // Pick random valid if desperate
+            preferredDirection = Math.random() < 0.5 ? "left" : "right";
+          }
+        }
+
+        // 2. Goal Seeking (Exit)
+        // If we need to exit, force move to right
+        if (car.state.targetExit) {
+          // Simplification: just try to go right until in lane 0 (outermost)?
+          // Actually config.numLanes-1 is outer. 0 is inner?
+          // The code implies radius increases with index, so index 0 is inner, numLanes-1 is outer.
+          // Wait, earlier logic: baseRadius + lane * width. Lane 0 is smallest radius (inner).
+          // Exits are usually on the outside?
+          // Let's assume exits are at the edge: lane = numLanes - 1.
+
+          if (car.state.lane < this.config.numLanes - 1) {
+            // Need to move right to exit
+            // Check distance to exit? simplified: just go right if goal is completed
+            if (car.hasReachedGoal()) {
+              wantToChange = true;
+              preferredDirection = "right";
+            }
+          }
+        }
+
+        // 3. Speed Advantage (Optional "MOBIL-lite")
+        // If not stuck but just going slow, improved flow
+        // Only aggressive drivers do this proactively without being stuck
+        if (car.state.driverType === "A" && !wantToChange) {
+          // Check if left lane is faster? Simplified: Randomly check left
+          if (Math.random() < 0.02) {
+            wantToChange = true;
+            preferredDirection = "left";
+          }
+        }
+
+        if (wantToChange && preferredDirection) {
+          // Validate Lane Existence
+          let targetLane = -1;
+          if (preferredDirection === "left" && currentLaneId > 0)
+            targetLane = currentLaneId - 1;
+          if (
+            preferredDirection === "right" &&
+            currentLaneId < this.config.numLanes - 1
+          )
+            targetLane = currentLaneId + 1;
+
+          // If preferred failed (e.g. want left but at inner edge), try other if desperate
+          if (
+            targetLane === -1 &&
+            car.state.stuckTime > frustrationThreshold * 2
           ) {
-            bestIdx++;
+            if (currentLaneId > 0) targetLane = currentLaneId - 1;
+            else if (currentLaneId < this.config.numLanes - 1)
+              targetLane = currentLaneId + 1;
           }
 
-          // bestIdx is the car physically *ahead* (larger angle) -> Leader
-          // bestIdx-1 is the car physically *behind* -> Follower
-          // Handle wrap:
-          const leaderIdx = bestIdx % targetList.length;
-          const followerIdx =
-            (bestIdx - 1 + targetList.length) % targetList.length;
-
-          return {
-            leader:
-              targetList[leaderIdx] === car ? null : targetList[leaderIdx], // shouldn't happen if different lane
-            follower:
-              targetList[followerIdx] === car ? null : targetList[followerIdx],
-          };
-        };
-
-        const left =
-          currentLaneId > 0
-            ? getLeaderFollower(currentLaneId - 1)
-            : { leader: null, follower: null };
-        const right =
-          currentLaneId < this.config.numLanes - 1
-            ? getLeaderFollower(currentLaneId + 1)
-            : { leader: null, follower: null };
-
-        // Construct simplified neighbors object for MOBIL
-        const neighbors = {
-          currentLeader: leader,
-          currentFollower: list[(myIndex - 1 + list.length) % list.length],
-          leftLeader: left.leader,
-          leftFollower: left.follower,
-          leftAdjacent: null, // collision check handles this
-          rightLeader: right.leader,
-          rightFollower: right.follower,
-          rightAdjacent: null, // collision check handles this
-        };
-
-        const getGap = (target: Car | null) => {
-          if (!target) return 1000;
-          return car.calculateGapTo(target, laneRadius, this.config.carLength);
-        };
-
-        const gaps = {
-          current: getGap(leader),
-          left: getGap(left.leader),
-          right: getGap(right.leader),
-        };
-
-        // Pass fake radius for calculation, isLaneChangeValid does the real check
-        const decision = shouldChangeLane(
-          car.state,
-          car.driver,
-          neighbors, // @ts-ignore
-          gaps,
-          this.config.speedLimit,
-          this.config.numLanes,
-          laneRadius,
-          this.config.carLength,
-          car.hasReachedGoal()
-        );
-
-        if (decision) {
-          const targetLane =
-            decision === "left" ? currentLaneId - 1 : currentLaneId + 1;
-          if (
-            this.isLaneChangeSafe(
-              car,
-              targetLane,
-              laneCars.get(targetLane) || []
-            )
-          ) {
-            car.startLaneChange(decision);
+          if (targetLane !== -1) {
+            // Safety Check
+            const targetList = laneCars.get(targetLane) || [];
+            if (this.isLaneChangeSafe(car, targetLane, targetList)) {
+              car.startLaneChange(
+                targetLane > currentLaneId ? "right" : "left"
+              );
+              // Reset stuck time on successful decision to switch
+              car.state.stuckTime = 0;
+            }
           }
         }
       }
     }
 
+    this.resolveCollisions(carsArray); // Prevent phasing
     this.updateYieldingBehavior();
     this.handleRamps(dt);
     this.processEntranceQueues(dt);
     this.updateRampCars(dt);
     this.pruneExitedCars();
+  }
+
+  private resolveCollisions(cars: Car[]): void {
+    // Simple N^2 check (optimized by loop, or spatial hash if needed, but N=100 is fast enough usually)
+    // Actually, we can use the Sorted Lane Lists! Collisions only happen in same lane mostly.
+    // But during lane change, cross-lane collisions happen.
+
+    const laneMap = new Map<number, Car[]>();
+    for (const c of cars) {
+      // Add to current lane
+      if (!laneMap.has(c.state.lane)) laneMap.set(c.state.lane, []);
+      laneMap.get(c.state.lane)!.push(c);
+
+      // If changing, add to target too just in case
+      if (c.isChangingLane) {
+        if (!laneMap.has(c.targetLane)) laneMap.set(c.targetLane, []);
+        laneMap.get(c.targetLane)!.push(c);
+      }
+    }
+
+    for (const [laneId, laneList] of laneMap) {
+      // Sort by position
+      laneList.sort((a, b) => a.state.position - b.state.position);
+
+      const laneRadius =
+        this.config.baseRadius + laneId * this.config.laneWidth;
+      const minSpacing = (this.config.carLength * 1.05) / laneRadius; // 5% buffer angular
+
+      for (let i = 0; i < laneList.length; i++) {
+        const c1 = laneList[i];
+        const c2 = laneList[(i + 1) % laneList.length]; // Next car (wrap)
+
+        if (c1 === c2) continue;
+
+        // Calculate Gap
+        let diff = c2.state.position - c1.state.position;
+        if (diff < 0) diff += Math.PI * 2;
+
+        if (diff < minSpacing) {
+          // Collision/Overlap Detected!
+          // Resolve: Push c1 back? Or slow c1 down massively?
+          // Modifying position directly prevents "phasing"
+          const overlap = minSpacing - diff;
+
+          // Move the rear car (c1) BACKWARDS, unless it's wrapping?
+          // It's easier to just stop c1 or adjust its position.
+          // Correct c1 position to be behind c2
+          c1.state.position -= overlap * 1.1; // Push back slightly more
+          c1.state.velocity *= 0.1; // Kill momentum
+          c1.state.acceleration = -5; // Brake hard
+        }
+      }
+    }
   }
 
   private isLaneChangeSafe(
@@ -348,11 +453,16 @@ export class Simulation {
       const frontCar = queue[0];
       if (!frontCar.waitingToMerge) continue;
 
+      const lastMerge = this.lastMergeTimes.get(rampId) || 0;
+      const now = performance.now();
+      if (now - lastMerge < 1500) continue; // 1.5s cooldown
+
       const canMerge = this.checkMergeGap(ramp);
 
       if (canMerge) {
         frontCar.waitingToMerge = false;
         frontCar.progress = 0;
+        this.lastMergeTimes.set(ramp.id, performance.now());
         queue.shift();
 
         for (let i = 0; i < queue.length; i++) {
@@ -485,6 +595,7 @@ export class Simulation {
     for (const ramp of this.ramps) {
       ramp.lane = this.config.numLanes - 1;
     }
+    this.onStructureChange?.();
   }
 
   removeLane(): void {
@@ -500,6 +611,7 @@ export class Simulation {
     for (const ramp of this.ramps) {
       ramp.lane = this.config.numLanes - 1;
     }
+    this.onStructureChange?.();
   }
 
   addRamp(type: "entrance" | "exit", angle: number): void {
@@ -511,10 +623,16 @@ export class Simulation {
       flowRate: type === "entrance" ? 0.5 : 0,
       lane: this.config.numLanes - 1,
     });
+    this.onStructureChange?.();
   }
 
   removeRamp(id: number): void {
     this.ramps = this.ramps.filter((r) => r.id !== id);
+    this.onStructureChange?.();
+  }
+
+  setSpeedLimit(limit: number): void {
+    this.config.speedLimit = limit;
   }
 
   getMetrics(): SimulationMetrics {

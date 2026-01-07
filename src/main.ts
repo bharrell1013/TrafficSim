@@ -61,6 +61,10 @@ simulation.onUpdate = (cars, metrics, rampCars) => {
   dashboard.update(metrics);
 };
 
+simulation.onStructureChange = () => {
+  renderCurrentState();
+};
+
 renderer.render([], simulation.config, simulation.ramps);
 
 const hamburgerBtn = document.getElementById("hamburger-btn");

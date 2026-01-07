@@ -41,6 +41,11 @@ export class Controls {
             <input type="range" id="spawn-rate" min="0" max="3" step="0.1" value="0.5">
             <span id="spawn-rate-value">0.5 cars/s</span>
           </div>
+          <h3>Speed Limit</h3>
+          <div class="slider-container">
+            <input type="range" id="speed-limit" min="30" max="150" step="5" value="80">
+            <span id="speed-limit-value">80 km/h</span>
+          </div>
         </div>
         
         <div class="control-section">
@@ -113,6 +118,16 @@ export class Controls {
       const rate = parseFloat(spawnRateSlider.value);
       spawnRateValue.textContent = `${rate.toFixed(1)} cars/s`;
       this.simulation.setSpawnRate(rate);
+    });
+
+    const speedLimitSlider = document.getElementById(
+      "speed-limit"
+    ) as HTMLInputElement;
+    const speedLimitValue = document.getElementById("speed-limit-value")!;
+    speedLimitSlider.addEventListener("input", () => {
+      const limit = parseFloat(speedLimitSlider.value);
+      speedLimitValue.textContent = `${limit} km/h`;
+      this.simulation.setSpeedLimit(limit);
     });
 
     const driverCheckboxes = ["driver-a", "driver-b", "driver-c"];

@@ -20,7 +20,8 @@ export function evaluateLaneChange(
   speedLimit: number,
   direction: "left" | "right",
   radius: number,
-  carLength: number
+  carLength: number,
+  densityIncentive: number = 0
 ): LaneChangeResult {
   const desiredSpeed = speedLimit * driver.desiredSpeedMultiplier;
   const safeDecelThreshold = -4;
@@ -66,7 +67,7 @@ export function evaluateLaneChange(
 
   const accGain = newAcc - currentAcc;
   const politenessLoss = driver.politeness * Math.abs(followerNewAcc);
-  const incentive = accGain - politenessLoss;
+  const incentive = accGain - politenessLoss + densityIncentive;
 
   const threshold = 0.1;
 
@@ -127,6 +128,7 @@ export function shouldChangeLane(
   numLanes: number,
   radius: number,
   carLength: number,
+  laneDensities: number[],
   hasReachedGoal: boolean = false
 ): "left" | "right" | null {
   const {
@@ -144,6 +146,23 @@ export function shouldChangeLane(
   const needsToExit = car.targetExit !== null && hasReachedGoal;
   const isInOuterLane = car.lane === numLanes - 1;
   const isInInnerLane = car.lane === 0;
+
+  // Density Incentive Calculation
+  // We want to encourage moving to lanes with fewer cars.
+  // Normalize density by lane count? Or just raw count difference.
+  // Raw difference is simplest.
+  // Tuning: 1 car difference -> small incentive. 5 cars -> large.
+  // Let's say adding 0.2 per car difference.
+
+  const getDensityIncentive = (targetLaneIdx: number) => {
+    if (targetLaneIdx < 0 || targetLaneIdx >= numLanes) return -999;
+    const currentDensity = laneDensities[car.lane] || 0;
+    const targetDensity = laneDensities[targetLaneIdx] || 0;
+    // Positive if target has fewer cars
+    // We only care about relative density
+    const diff = currentDensity - targetDensity;
+    return diff * 0.3; // Factor
+  };
 
   if (needsToExit && !isInOuterLane) {
     if (hasAdjacentCar(car, rightAdjacent, radius, carLength)) return null;
@@ -172,7 +191,8 @@ export function shouldChangeLane(
       speedLimit,
       "right",
       radius,
-      carLength
+      carLength,
+      getDensityIncentive(car.lane + 1)
     );
     if (rightResult.safetyOk) return "right";
     return null;
@@ -209,7 +229,8 @@ export function shouldChangeLane(
           speedLimit,
           "left",
           radius,
-          carLength
+          carLength,
+          getDensityIncentive(car.lane - 1)
         );
         if (leftResult.direction) return "left";
 
@@ -249,7 +270,8 @@ export function shouldChangeLane(
             speedLimit,
             "right",
             radius,
-            carLength
+            carLength,
+            getDensityIncentive(car.lane + 1)
           );
           if (rightResult.direction) return "right";
         }

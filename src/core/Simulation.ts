@@ -51,6 +51,8 @@ export class Simulation {
     this.exitedCars = [];
     this.rampCars = [];
     this.entranceQueues.clear();
+    this.ramps = [];
+    this.onStructureChange?.();
   }
 
   private loop = (): void => {
@@ -82,20 +84,22 @@ export class Simulation {
     const carsArray = Array.from(this.cars.values());
 
     // 1. Build Sorted Lane Lists
+    // CRITICAL FIX: Cars changing lanes are physically present in BOTH lanes for safety.
     const laneCars = new Map<number, Car[]>();
     for (let i = 0; i < this.config.numLanes; i++) {
       laneCars.set(i, []);
     }
     for (const car of carsArray) {
-      if (!car.isChangingLane) {
-        laneCars.get(car.state.lane)?.push(car);
-      } else {
-        // If changing lane, we might want to check both or just target?
-        // For simplicity, keep track in current lane until switch is done.
-        laneCars.get(car.state.lane)?.push(car);
+      // Always in current lane
+      laneCars.get(car.state.lane)?.push(car);
+
+      // If changing, also in target lane
+      if (car.isChangingLane && car.targetLane !== car.state.lane) {
+        laneCars.get(car.targetLane)?.push(car);
       }
     }
-    // Sort by position (descending or ascending) - let's do ascending 0->2PI
+
+    // Sort by position 0->2PI
     for (const [, list] of laneCars) {
       list.sort((a, b) => a.state.position - b.state.position);
     }
@@ -106,19 +110,43 @@ export class Simulation {
 
     for (const car of carsArray) {
       const currentLaneId = car.state.lane;
-      const list = laneCars.get(currentLaneId)!;
 
       // Find leader in sorted list
-      let leader: Car | null = null;
-      // Simple linear scan or find index since list is sorted
-      const myIndex = list.findIndex((c) => c.state.id === car.state.id);
-      if (myIndex !== -1) {
-        // Leader is the next car in the array (wrapping around)
-        const leaderIndex = (myIndex + 1) % list.length;
-        if (leaderIndex !== myIndex) {
-          leader = list[leaderIndex];
+      // Since we might be in multiple lists (if changing), this logic needs to be robust.
+      // We purely want the CLOSEST car ahead in the current context.
+
+      // Helper to find closest car ahead in a specific lane list
+      const findLeaderInLane = (
+        laneIdx: number,
+        myPos: number,
+        myId: string
+      ): Car | null => {
+        const laneList = laneCars.get(laneIdx);
+        if (!laneList || laneList.length === 0) return null;
+
+        // Find car with smallest positive diff
+        let bestCar: Car | null = null;
+        let minDiff = Infinity;
+
+        for (const other of laneList) {
+          if (other.state.id === myId) continue;
+
+          let diff = other.state.position - myPos;
+          if (diff < 0) diff += Math.PI * 2;
+
+          if (diff < minDiff) {
+            minDiff = diff;
+            bestCar = other;
+          }
         }
-      }
+        return bestCar;
+      };
+
+      let leader = findLeaderInLane(
+        currentLaneId,
+        car.state.position,
+        car.state.id
+      );
 
       // Helper to calculate gap and rate to a specific car
       const getGapAndRate = (target: Car | null, laneIdx: number) => {
@@ -183,6 +211,33 @@ export class Simulation {
         this.config.speedLimit,
         currentLaneRadius
       );
+
+      // --- RAMP CLEARANCE LOGIC ---
+      // If passing an entrance ramp with waiting cars, accelerate to clear the way!
+      if (car.state.lane === this.config.numLanes - 1) {
+        for (const ramp of this.ramps) {
+          if (
+            ramp.type === "entrance" &&
+            (this.entranceQueues.get(ramp.id)?.length || 0) > 0
+          ) {
+            let dist = car.state.position - ramp.angle;
+            // Normalize dist to [-PI, PI]
+            while (dist > Math.PI) dist -= Math.PI * 2;
+            while (dist < -Math.PI) dist += Math.PI * 2;
+
+            // If we are within a small window around the ramp (blocking or just passed)
+            // Range: From slightly behind (-0.05) to a bit ahead (+0.2)
+            // We want to minimize time spent in [-0.05, 0.15]
+            if (dist > -0.05 && dist < 0.2) {
+              // FORCE ACCELERATION
+              // Don't stop!
+              if (car.state.velocity < this.config.speedLimit * 1.5) {
+                car.state.acceleration = Math.max(car.state.acceleration, 4.0);
+              }
+            }
+          }
+        }
+      }
 
       if (!car.isChangingLane) {
         // --- Simplified Driver Logic ---
@@ -354,16 +409,29 @@ export class Simulation {
 
         if (diff < minSpacing) {
           // Collision/Overlap Detected!
-          // Resolve: Push c1 back? Or slow c1 down massively?
-          // Modifying position directly prevents "phasing"
           const overlap = minSpacing - diff;
 
-          // Move the rear car (c1) BACKWARDS, unless it's wrapping?
-          // It's easier to just stop c1 or adjust its position.
-          // Correct c1 position to be behind c2
-          c1.state.position -= overlap * 1.1; // Push back slightly more
-          c1.state.velocity *= 0.1; // Kill momentum
-          c1.state.acceleration = -5; // Brake hard
+          // HYBRID RESOLUTION:
+          // 1. If moving fast, use Speed Differential (Braking) to clear overlap.
+          // 2. If stopped/slow, use Position Correction (Push) to clear overlap.
+
+          const isMoving = c1.state.velocity > 5 && c2.state.velocity > 5;
+
+          if (isMoving) {
+            // DYNAMIC: Force rear car to be slower than front car to open gap
+            const targetVel = c2.state.velocity * 0.8; // 80% of leader speed
+            if (c1.state.velocity > targetVel) {
+              c1.state.velocity = targetVel;
+            }
+            c1.state.acceleration = -5; // Brake hard
+          } else {
+            // STATIC: Push apart gently
+            c1.state.position -= overlap * 0.1;
+            c1.state.velocity = 0;
+            c1.state.acceleration = 0;
+          }
+
+          c1.state.stuckTime += 0.1;
         }
       }
     }
@@ -468,10 +536,29 @@ export class Simulation {
       const canMerge = this.checkMergeGap(ramp);
 
       if (canMerge) {
-        frontCar.waitingToMerge = false;
-        frontCar.progress = 0;
-        this.lastMergeTimes.set(ramp.id, now);
+        // --- IMMEDIATE MERGE ---
+        const exitRamps = this.ramps.filter((r) => r.type === "exit");
+        const targetExit =
+          exitRamps.length > 0
+            ? exitRamps[Math.floor(Math.random() * exitRamps.length)].id
+            : null;
+
+        const car = new Car(
+          ramp.angle,
+          ramp.lane,
+          this.config.speedLimit * 0.8,
+          frontCar.driverType,
+          targetExit
+        );
+        // Trigger post-merge boost
+        car.state.lastLaneChangeTime = performance.now();
+        this.cars.set(car.state.id, car);
+
+        // Remove from rampCars and Queue immediately
+        this.rampCars = this.rampCars.filter((c) => c.id !== frontCar.id);
         queue.shift();
+
+        this.lastMergeTimes.set(ramp.id, now);
 
         // Update queue positions
         for (let i = 0; i < queue.length; i++) {
@@ -511,13 +598,18 @@ export class Simulation {
     let distBehind = Infinity;
 
     for (const car of this.cars.values()) {
-      // Filter for outer lane only
-      if (car.state.lane !== outerLane) continue;
+      // Filter for outer lane check
+      // MUST check if car is IN the lane OR TARGETING the lane (to avoid crashing into lane changers)
+      const isRelevant =
+        car.state.lane === outerLane ||
+        (car.isChangingLane && car.targetLane === outerLane);
+
+      if (!isRelevant) continue;
 
       // Calculate signed angular difference: car - ramp
       let diff = car.state.position - ramp.angle;
 
-      // Normalize to [-PI, PI] to handle wrap-around correctly
+      // Normalize to [-PI, PI]
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
 
@@ -536,11 +628,11 @@ export class Simulation {
     }
 
     // Safety Thresholds include buffer
-    // AHEAD: 2.0 car lengths (Increased from 1.3)
-    const reqDistAhead = carAngularSize * 2.0;
+    // AHEAD: 3.0 car lengths (Increased to prevent cutting off)
+    const reqDistAhead = carAngularSize * 3.0;
 
-    // BEHIND: 2.5 car lengths (Increased from 1.5)
-    const reqDistBehind = carAngularSize * 2.5;
+    // BEHIND: 4.0 car lengths (Increased to prevent rear-ending)
+    const reqDistBehind = carAngularSize * 4.0;
 
     if (distAhead < reqDistAhead) return false;
     if (distBehind < reqDistBehind) return false;
@@ -562,26 +654,9 @@ export class Simulation {
     }
 
     for (const completed of completedCars) {
-      const ramp = this.ramps.find((r) => r.id === completed.rampId);
-      if (ramp && completed.entering) {
-        const exitRamps = this.ramps.filter((r) => r.type === "exit");
-        const targetExit =
-          exitRamps.length > 0
-            ? exitRamps[Math.floor(Math.random() * exitRamps.length)].id
-            : null;
-
-        const car = new Car(
-          ramp.angle,
-          ramp.lane,
-          this.config.speedLimit * 0.8,
-          completed.driverType,
-          targetExit
-        );
-        this.cars.set(car.state.id, car);
-      } else if (!completed.entering) {
+      if (!completed.entering) {
         this.exitedCars.push(Date.now());
       }
-
       this.rampCars = this.rampCars.filter((c) => c.id !== completed.id);
     }
   }
@@ -684,11 +759,17 @@ export class Simulation {
         ? cars.reduce((sum, c) => sum + c.state.velocity, 0) / cars.length
         : 0;
 
+    const waitingCars = Array.from(this.entranceQueues.values()).reduce(
+      (sum, q) => sum + q.length,
+      0
+    );
+
     return {
       throughput: this.exitedCars.length,
       averageSpeed: avgSpeed,
       density: cars.length,
       totalCars: cars.length,
+      waitingCars,
     };
   }
 

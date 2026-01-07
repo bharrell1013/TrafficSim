@@ -72,6 +72,7 @@ export interface SimulationMetrics {
   averageSpeed: number;
   density: number;
   totalCars: number;
+  waitingCars: number;
 }
 
 export const DRIVER_PROFILES: Record<DriverType, DriverProfile> = {

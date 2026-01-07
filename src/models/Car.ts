@@ -23,8 +23,8 @@ export class Car {
       B: 0.5,
       C: 1.5,
     };
-    // Base goal in laps (1 to 3 laps)
-    const minLaps = 1 + Math.random() * 2;
+    // Base goal in laps (Reduced)
+    const minLaps = 0.5 + Math.random() * 1.5;
     // Approximate average circumference (Radius ~185 * 2 * PI) ~ 1160 pixels
     const approxCircumference = 1160;
 
@@ -68,9 +68,10 @@ export class Car {
       desiredSpeed *= 0.9 + Math.random() * 0.2;
     }
 
-    if (this.state.isYielding) {
-      desiredSpeed *= 0.5;
-    }
+    // Removed Yielding Logic to prevent stuck cars
+    // if (this.state.isYielding) {
+    //   desiredSpeed *= 0.5;
+    // }
 
     // Update Stuck Time
     if (this.state.velocity < desiredSpeed * 0.6 && currentGap < 50) {
@@ -96,23 +97,36 @@ export class Car {
     );
 
     // --- GAP FILLER LOGIC ---
-    // If there is a lot of space, accelerate hard!
-    // IDM is sometimes too polite.
-    if (gap > 80 && this.state.velocity < desiredSpeed * 0.95) {
-      // Boost acceleration
-      const boost = this.state.driverType === "A" ? 1.0 : 0.5;
+    // If there is space, accelerate hard! Scale with speed limit.
+    const gapThreshold = speedLimit * 0.5; // e.g. 40 units at 80 speed limit
+    if (gap > gapThreshold && this.state.velocity < desiredSpeed * 0.98) {
+      // General Boost
+      const boost = this.state.driverType === "A" ? 1.5 : 0.8;
       this.state.acceleration = Math.max(
         this.state.acceleration,
         this.driver.maxAcceleration * boost
       );
+
+      // --- POST-MERGE / LANE CHANGE TURBO ---
+      // If we recently merged or changed lanes (within 3 seconds), be very aggressive
+      const timeSinceChange = performance.now() - this.state.lastLaneChangeTime;
+      if (timeSinceChange < 3000) {
+        // Accelerate extremely hard if the road is clear
+        if (gap > speedLimit * 0.8) {
+          this.state.acceleration = Math.max(
+            this.state.acceleration,
+            this.driver.maxAcceleration * 3.0 // Triple acceleration to get up to speed
+          );
+        }
+      }
     }
 
     // Hard clamps for collision avoidance (The "Don't Hit Stuff" rule)
-    if (gap < 5) {
-      this.state.acceleration = -this.driver.maxAcceleration * 2; // Emergency brake
-      this.state.velocity = 0; // Force stop if literally touching
-    } else if (gap < 15) {
-      this.state.acceleration = Math.min(this.state.acceleration, -2); // Strong braking
+    if (gap < 3) {
+      this.state.acceleration = -this.driver.maxAcceleration * 1.5; // Emergency brake
+      this.state.velocity = Math.max(0, this.state.velocity - 2 * dt); // Reducing velocity directly but not zeroing
+    } else if (gap < 10) {
+      this.state.acceleration = Math.min(this.state.acceleration, -1); // Braking
     }
 
     // Acceleration smoothing
@@ -127,6 +141,9 @@ export class Car {
     if (this.state.position >= Math.PI * 2) {
       this.state.position -= Math.PI * 2;
       this.state.lapsCompleted++;
+    } else if (this.state.position < 0) {
+      this.state.position += Math.PI * 2;
+      this.state.lapsCompleted--; // Technically un-lapping?
     }
 
     if (this.isChangingLane) {

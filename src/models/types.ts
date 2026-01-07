@@ -55,6 +55,7 @@ export interface RampCar {
   entering: boolean;
   queuePosition: number;
   waitingToMerge: boolean;
+  waitTime: number;
 }
 
 export interface SimulationConfig {

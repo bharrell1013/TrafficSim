@@ -254,7 +254,7 @@ export class Simulation {
 
           // If preferred failed (e.g. want left but at inner edge), try other if desperate
           if (
-            targetLane === -1 &&
+            targetLane !== -1 &&
             car.state.stuckTime > frustrationThreshold * 2
           ) {
             if (currentLaneId > 0) targetLane = currentLaneId - 1;
@@ -274,11 +274,42 @@ export class Simulation {
             }
           }
         }
+
+        // --- Cooperative Lane Change (Yield to Entering Traffic) ---
+        // If approaching an entrance ramp in the outer lane, and NOT aggressive, try to move left.
+        if (
+          !car.isChangingLane &&
+          car.state.lane === this.config.numLanes - 1 &&
+          car.state.driverType !== "A"
+        ) {
+          for (const ramp of this.ramps) {
+            if (ramp.type === "entrance") {
+              // Check distance to ramp
+              let distToRamp = ramp.angle - car.state.position;
+              if (distToRamp < 0) distToRamp += Math.PI * 2;
+
+              // If we are approaching (e.g. within 1/8th of a circle approx ~ 0.8 rads)
+              // And there is an inner lane available
+              if (
+                distToRamp < 0.8 &&
+                distToRamp > 0.1 &&
+                this.config.numLanes > 1
+              ) {
+                const targetLane = car.state.lane - 1; // Move Left (Inward)
+                const targetList = laneCars.get(targetLane) || [];
+                if (this.isLaneChangeSafe(car, targetLane, targetList)) {
+                  car.startLaneChange("left");
+                  break; // Only need to do this for the first relevant ramp
+                }
+              }
+            }
+          }
+        }
       }
     }
 
     this.resolveCollisions(carsArray); // Prevent phasing
-    this.updateYieldingBehavior();
+    // Yielding logic removed
     this.handleRamps(dt);
     this.processEntranceQueues(dt);
     this.updateRampCars(dt);
@@ -372,39 +403,6 @@ export class Simulation {
     return true;
   }
 
-  private updateYieldingBehavior(): void {
-    for (const car of this.cars.values()) {
-      car.state.isYielding = false;
-      car.state.yieldTarget = null;
-    }
-
-    for (const ramp of this.ramps) {
-      if (ramp.type !== "entrance") continue;
-
-      const queue = this.entranceQueues.get(ramp.id);
-      if (!queue || queue.length === 0) continue;
-
-      const outerLane = this.config.numLanes - 1;
-      const nearbyCars = this.spatialHash.getNearby(ramp.angle, outerLane, 4);
-
-      for (const car of nearbyCars) {
-        if (car.state.lane !== outerLane) continue;
-
-        let distToRamp = ramp.angle - car.state.position;
-        if (distToRamp < 0) distToRamp += Math.PI * 2;
-        if (distToRamp > Math.PI) continue;
-
-        if (distToRamp < 0.5 && distToRamp > 0.1) {
-          const yieldChance = car.driver.yieldProbability;
-          if (Math.random() < yieldChance * 0.1) {
-            car.state.isYielding = true;
-            car.state.yieldTarget = ramp.id;
-          }
-        }
-      }
-    }
-  }
-
   private handleRamps(dt: number): void {
     for (const ramp of this.ramps) {
       if (ramp.type === "entrance") {
@@ -437,6 +435,7 @@ export class Simulation {
       entering: true,
       queuePosition: queue.length,
       waitingToMerge: true,
+      waitTime: 0,
     };
 
     queue.push(newCar);
@@ -453,30 +452,45 @@ export class Simulation {
       const frontCar = queue[0];
       if (!frontCar.waitingToMerge) continue;
 
+      // Update wait time for metrics/debug
+      frontCar.waitTime += dt;
+
       const lastMerge = this.lastMergeTimes.get(rampId) || 0;
       const now = performance.now();
-      if (now - lastMerge < 1500) continue; // 1.5s cooldown
+      const timeSinceLastMerge = now - lastMerge;
 
+      // Fixed small delay between merges (600ms)
+      const MERGE_DELAY_MS = 600;
+
+      if (timeSinceLastMerge < MERGE_DELAY_MS) continue;
+
+      // Strictly check for available space.
       const canMerge = this.checkMergeGap(ramp);
 
       if (canMerge) {
         frontCar.waitingToMerge = false;
         frontCar.progress = 0;
-        this.lastMergeTimes.set(ramp.id, performance.now());
+        this.lastMergeTimes.set(ramp.id, now);
         queue.shift();
 
+        // Update queue positions
         for (let i = 0; i < queue.length; i++) {
           queue[i].queuePosition = i;
         }
       }
     }
 
+    // Animate cars in the queue (visual only)
     for (const rampCar of this.rampCars) {
       if (rampCar.waitingToMerge && rampCar.entering) {
-        rampCar.progress = Math.min(
-          rampCar.progress + dt * 1.0,
-          0.4 + rampCar.queuePosition * 0.12
-        );
+        // Move up to the "stop line" (progress 0.4 approx)
+        const targetProgress = 0.4 + rampCar.queuePosition * 0.12;
+        if (rampCar.progress < targetProgress) {
+          rampCar.progress = Math.min(
+            rampCar.progress + dt * 1.0,
+            targetProgress
+          );
+        }
       }
     }
   }
@@ -486,27 +500,50 @@ export class Simulation {
     const outerLaneRadius =
       this.config.baseRadius + outerLane * this.config.laneWidth;
 
-    // Check search range enough to cover safety distance
-    // 3 buckets ~ 30deg. At 150px radius, 30deg is ~78px.
-    // If cars are very fast, might need more, but for merge check 3 is okay if density is normal.
-    // Let's bump it to 4 to be safe.
-    const nearbyCars = this.spatialHash.getNearby(ramp.angle, outerLane, 4);
+    const carAngularSize = this.config.carLength / outerLaneRadius;
 
-    // Minimum gap: Car Length + 50% buffer + linear safety margin
-    const minSafetyGap = this.config.carLength * 2.5;
+    // We need to check the closest car AHEAD and the closest car BEHIND.
+    // CRITICAL CHANGE: Use this.cars directly.
+    // spatialHash is stale (pre-update), laneCars is stale coverage.
+    // Iterating all cars is O(N) but essential for accuracy here.
 
-    for (const car of nearbyCars) {
+    let distAhead = Infinity;
+    let distBehind = Infinity;
+
+    for (const car of this.cars.values()) {
+      // Filter for outer lane only
       if (car.state.lane !== outerLane) continue;
 
-      let angleDiff = Math.abs(car.state.position - ramp.angle);
-      if (angleDiff > Math.PI) angleDiff = Math.PI * 2 - angleDiff;
+      // Calculate signed angular difference: car - ramp
+      let diff = car.state.position - ramp.angle;
 
-      const linearGap = angleDiff * outerLaneRadius;
+      // Normalize to [-PI, PI] to handle wrap-around correctly
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
 
-      if (linearGap < minSafetyGap) {
-        return false;
+      // Optimization: If car is halfway across the map, ignore it
+      if (Math.abs(diff) > 1.0) continue;
+
+      // Positive diff -> Car is Ahead
+      // Negative diff -> Car is Behind
+      if (diff > 0) {
+        if (diff < distAhead) distAhead = diff;
+      } else {
+        // diff is negative, but we want positive distance magnitude
+        const d = Math.abs(diff);
+        if (d < distBehind) distBehind = d;
       }
     }
+
+    // Safety Thresholds include buffer
+    // AHEAD: 2.0 car lengths (Increased from 1.3)
+    const reqDistAhead = carAngularSize * 2.0;
+
+    // BEHIND: 2.5 car lengths (Increased from 1.5)
+    const reqDistBehind = carAngularSize * 2.5;
+
+    if (distAhead < reqDistAhead) return false;
+    if (distBehind < reqDistBehind) return false;
 
     return true;
   }
@@ -572,6 +609,7 @@ export class Simulation {
             entering: false,
             queuePosition: 0,
             waitingToMerge: false,
+            waitTime: 0,
           });
         }
       }

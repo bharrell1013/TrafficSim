@@ -95,6 +95,18 @@ export class Car {
       this.driver
     );
 
+    // --- GAP FILLER LOGIC ---
+    // If there is a lot of space, accelerate hard!
+    // IDM is sometimes too polite.
+    if (gap > 80 && this.state.velocity < desiredSpeed * 0.95) {
+      // Boost acceleration
+      const boost = this.state.driverType === "A" ? 1.0 : 0.5;
+      this.state.acceleration = Math.max(
+        this.state.acceleration,
+        this.driver.maxAcceleration * boost
+      );
+    }
+
     // Hard clamps for collision avoidance (The "Don't Hit Stuff" rule)
     if (gap < 5) {
       this.state.acceleration = -this.driver.maxAcceleration * 2; // Emergency brake

@@ -7,7 +7,7 @@ import type { RampPlacementMode } from "./ui/Controls";
 import type { SimulationConfig } from "./models/types";
 
 const config: SimulationConfig = {
-  speedLimit: 30,
+  speedLimit: 80,
   numLanes: 3,
   baseRadius: 150,
   laneWidth: 35,

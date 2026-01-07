@@ -21,7 +21,7 @@ export class Simulation {
   private lastTime: number = 0;
   private accumulator: number = 0;
   private readonly fixedDt: number = 1 / 60;
-  private readonly minMergeGap: number = 0.12;
+  private readonly fixedDt: number = 1 / 60;
 
   private exitedCars: number[] = [];
   private allowedDriverTypes: Set<DriverType> = new Set(["A", "B", "C"]);
@@ -80,41 +80,148 @@ export class Simulation {
 
   step(dt: number): void {
     const carsArray = Array.from(this.cars.values());
+
+    // 1. Build Sorted Lane Lists
+    const laneCars = new Map<number, Car[]>();
+    for (let i = 0; i < this.config.numLanes; i++) {
+      laneCars.set(i, []);
+    }
+    for (const car of carsArray) {
+      if (!car.isChangingLane) {
+        laneCars.get(car.state.lane)?.push(car);
+      } else {
+        // If changing lane, we might want to check both or just target?
+        // For simplicity, keep track in current lane until switch is done.
+        laneCars.get(car.state.lane)?.push(car);
+      }
+    }
+    // Sort by position (descending or ascending) - let's do ascending 0->2PI
+    for (const [, list] of laneCars) {
+      list.sort((a, b) => a.state.position - b.state.position);
+    }
+
+    // Reuse SpatialHash ONLY for ramp queries if needed or remove it later.
+    // updating it just in case ramp logic still uses it.
     this.spatialHash.update(carsArray);
 
     for (const car of carsArray) {
-      const neighbors = this.spatialHash.getNeighbors(
-        car,
-        this.config.numLanes
+      const currentLaneId = car.state.lane;
+      const list = laneCars.get(currentLaneId)!;
+
+      // Find leader in sorted list
+      let leader: Car | null = null;
+      // Simple linear scan or find index since list is sorted
+      const myIndex = list.findIndex((c) => c.state.id === car.state.id);
+      if (myIndex !== -1) {
+        // Leader is the next car in the array (wrapping around)
+        const leaderIndex = (myIndex + 1) % list.length;
+        if (leaderIndex !== myIndex) {
+          leader = list[leaderIndex];
+        }
+      }
+
+      const laneRadius =
+        this.config.baseRadius + car.state.lane * this.config.laneWidth;
+
+      car.update(
+        dt,
+        leader,
+        this.config.speedLimit,
+        laneRadius,
+        this.config.carLength
       );
 
-      car.update(dt, neighbors.currentLeader, this.config.speedLimit);
+      if (!car.isChangingLane && Math.random() < 0.1) {
+        // Check for lane changes...
+        // We need neighbors for MOBIL
+        // Simplified neighbor finding:
+        const getLeaderFollower = (laneId: number) => {
+          const targetList = laneCars.get(laneId);
+          if (!targetList || targetList.length === 0)
+            return { leader: null, follower: null };
 
-      if (!car.isChangingLane && Math.random() < 0.03) {
-        const gaps = {
-          current: neighbors.currentLeader
-            ? car.calculateGapTo(neighbors.currentLeader)
-            : 1000,
-          left: neighbors.leftLeader
-            ? car.calculateGapTo(neighbors.leftLeader)
-            : 1000,
-          right: neighbors.rightLeader
-            ? car.calculateGapTo(neighbors.rightLeader)
-            : 1000,
+          // Find insertion point
+          let bestIdx = 0;
+          // Since it's sorted 0..2PI
+          while (
+            bestIdx < targetList.length &&
+            targetList[bestIdx].state.position < car.state.position
+          ) {
+            bestIdx++;
+          }
+
+          // bestIdx is the car physically *ahead* (larger angle) -> Leader
+          // bestIdx-1 is the car physically *behind* -> Follower
+          // Handle wrap:
+          const leaderIdx = bestIdx % targetList.length;
+          const followerIdx =
+            (bestIdx - 1 + targetList.length) % targetList.length;
+
+          return {
+            leader:
+              targetList[leaderIdx] === car ? null : targetList[leaderIdx], // shouldn't happen if different lane
+            follower:
+              targetList[followerIdx] === car ? null : targetList[followerIdx],
+          };
         };
 
+        const left =
+          currentLaneId > 0
+            ? getLeaderFollower(currentLaneId - 1)
+            : { leader: null, follower: null };
+        const right =
+          currentLaneId < this.config.numLanes - 1
+            ? getLeaderFollower(currentLaneId + 1)
+            : { leader: null, follower: null };
+
+        // Construct simplified neighbors object for MOBIL
+        const neighbors = {
+          currentLeader: leader,
+          currentFollower: list[(myIndex - 1 + list.length) % list.length],
+          leftLeader: left.leader,
+          leftFollower: left.follower,
+          leftAdjacent: null, // collision check handles this
+          rightLeader: right.leader,
+          rightFollower: right.follower,
+          rightAdjacent: null, // collision check handles this
+        };
+
+        const getGap = (target: Car | null) => {
+          if (!target) return 1000;
+          return car.calculateGapTo(target, laneRadius, this.config.carLength);
+        };
+
+        const gaps = {
+          current: getGap(leader),
+          left: getGap(left.leader),
+          right: getGap(right.leader),
+        };
+
+        // Pass fake radius for calculation, isLaneChangeValid does the real check
         const decision = shouldChangeLane(
           car.state,
           car.driver,
-          neighbors,
+          neighbors, // @ts-ignore
           gaps,
           this.config.speedLimit,
           this.config.numLanes,
+          laneRadius,
+          this.config.carLength,
           car.hasReachedGoal()
         );
 
-        if (decision && this.isLaneChangeValid(car, decision)) {
-          car.startLaneChange(decision);
+        if (decision) {
+          const targetLane =
+            decision === "left" ? currentLaneId - 1 : currentLaneId + 1;
+          if (
+            this.isLaneChangeSafe(
+              car,
+              targetLane,
+              laneCars.get(targetLane) || []
+            )
+          ) {
+            car.startLaneChange(decision);
+          }
         }
       }
     }
@@ -126,21 +233,36 @@ export class Simulation {
     this.pruneExitedCars();
   }
 
-  private isLaneChangeValid(car: Car, direction: "left" | "right"): boolean {
-    const newLane =
-      direction === "left" ? car.state.lane - 1 : car.state.lane + 1;
-    if (newLane < 0 || newLane >= this.config.numLanes) return false;
+  private isLaneChangeSafe(
+    car: Car,
+    targetLaneIdx: number,
+    targetList: Car[]
+  ): boolean {
+    if (targetLaneIdx < 0 || targetLaneIdx >= this.config.numLanes)
+      return false;
 
-    const carsInTargetLane = this.spatialHash.getNearby(
-      car.state.position,
-      newLane,
-      2
-    );
-    for (const other of carsInTargetLane) {
+    const targetRadius =
+      this.config.baseRadius + targetLaneIdx * this.config.laneWidth;
+
+    // Strict Interval Overlap Check
+    // My interval: [back, front] (handle wrapping?) -> angular
+    // Let's us angular distance check for simplicity with wraparound
+
+    const safetyBuffer = (this.config.carLength * 1.5) / targetRadius; // angular buffer
+
+    for (const other of targetList) {
       if (other.state.id === car.state.id) continue;
-      let gap = Math.abs(other.state.position - car.state.position);
-      if (gap > Math.PI) gap = Math.PI * 2 - gap;
-      if (gap < 0.15) return false;
+
+      let dist = Math.abs(other.state.position - car.state.position);
+      if (dist > Math.PI) dist = Math.PI * 2 - dist;
+
+      // Angular size of ONE car
+      const carAngularSize = this.config.carLength / targetRadius;
+
+      // If distance < (size + buffer), we overlap
+      if (dist < carAngularSize + safetyBuffer) {
+        return false;
+      }
     }
     return true;
   }
@@ -251,15 +373,27 @@ export class Simulation {
 
   private checkMergeGap(ramp: RampConfig): boolean {
     const outerLane = this.config.numLanes - 1;
-    const nearbyCars = this.spatialHash.getNearby(ramp.angle, outerLane, 3);
+    const outerLaneRadius =
+      this.config.baseRadius + outerLane * this.config.laneWidth;
+
+    // Check search range enough to cover safety distance
+    // 3 buckets ~ 30deg. At 150px radius, 30deg is ~78px.
+    // If cars are very fast, might need more, but for merge check 3 is okay if density is normal.
+    // Let's bump it to 4 to be safe.
+    const nearbyCars = this.spatialHash.getNearby(ramp.angle, outerLane, 4);
+
+    // Minimum gap: Car Length + 50% buffer + linear safety margin
+    const minSafetyGap = this.config.carLength * 2.5;
 
     for (const car of nearbyCars) {
       if (car.state.lane !== outerLane) continue;
 
-      let gap = Math.abs(car.state.position - ramp.angle);
-      if (gap > Math.PI) gap = Math.PI * 2 - gap;
+      let angleDiff = Math.abs(car.state.position - ramp.angle);
+      if (angleDiff > Math.PI) angleDiff = Math.PI * 2 - angleDiff;
 
-      if (gap < this.minMergeGap) {
+      const linearGap = angleDiff * outerLaneRadius;
+
+      if (linearGap < minSafetyGap) {
         return false;
       }
     }

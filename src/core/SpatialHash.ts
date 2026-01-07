@@ -59,10 +59,14 @@ export class SpatialHash {
     const pos = car.state.position;
     const lane = car.state.lane;
 
-    const currentLane = this.getNearby(pos, lane, 3);
-    const leftLane = lane > 0 ? this.getNearby(pos, lane - 1, 3) : [];
+    // Search a much wider range for leaders (approx 180 degrees)
+    const forwardRange = 18;
+
+    const currentLane = this.getNearby(pos, lane, forwardRange);
+    const leftLane =
+      lane > 0 ? this.getNearby(pos, lane - 1, forwardRange) : [];
     const rightLane =
-      lane < numLanes - 1 ? this.getNearby(pos, lane + 1, 3) : [];
+      lane < numLanes - 1 ? this.getNearby(pos, lane + 1, forwardRange) : [];
 
     return {
       currentLeader: this.findLeader(car, currentLane),
@@ -85,7 +89,9 @@ export class SpatialHash {
 
       let gap = candidate.state.position - car.state.position;
       if (gap < 0) gap += Math.PI * 2;
-      if (gap < 0.01) gap += Math.PI * 2;
+
+      // Ignore if strictly behind (allows for small float errors or wrap-around overlap in search)
+      if (gap > Math.PI) continue;
 
       if (gap < minGap) {
         minGap = gap;

@@ -42,6 +42,7 @@ export interface RampConfig {
   angle: number;
   flowRate: number;
   lane: number;
+  lastSpawnTime?: number;
 }
 
 export interface RampCar {

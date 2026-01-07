@@ -18,7 +18,9 @@ export function evaluateLaneChange(
   currentLaneGap: number,
   targetLaneGap: number,
   speedLimit: number,
-  direction: "left" | "right"
+  direction: "left" | "right",
+  radius: number,
+  carLength: number
 ): LaneChangeResult {
   const desiredSpeed = speedLimit * driver.desiredSpeedMultiplier;
   const safeDecelThreshold = -4;
@@ -27,7 +29,7 @@ export function evaluateLaneChange(
     ? calculateIDMAcceleration(
         car.velocity,
         desiredSpeed,
-        currentLaneGap,
+        currentLaneGap, // Already linear
         car.velocity - currentLeader.state.velocity,
         driver
       )
@@ -37,7 +39,7 @@ export function evaluateLaneChange(
     ? calculateIDMAcceleration(
         car.velocity,
         desiredSpeed,
-        targetLaneGap,
+        targetLaneGap, // Already linear
         car.velocity - targetLeader.state.velocity,
         driver
       )
@@ -47,7 +49,9 @@ export function evaluateLaneChange(
   if (targetFollower) {
     const gapToNewFollower = calculateGap(
       targetFollower.state.position,
-      car.position
+      car.position,
+      radius,
+      carLength
     );
     followerNewAcc = calculateIDMAcceleration(
       targetFollower.state.velocity,
@@ -73,21 +77,32 @@ export function evaluateLaneChange(
   };
 }
 
-function calculateGap(followerPos: number, leaderPos: number): number {
-  let gap = leaderPos - followerPos;
-  if (gap < 0) gap += Math.PI * 2;
-  return gap * 50;
+function calculateGap(
+  followerPos: number,
+  leaderPos: number,
+  radius: number,
+  carLength: number
+): number {
+  let deltaAngle = leaderPos - followerPos;
+  if (deltaAngle < 0) deltaAngle += Math.PI * 2;
+
+  const linearDist = deltaAngle * radius;
+  return Math.max(0, linearDist - carLength);
 }
 
 function hasAdjacentCar(
   car: CarState,
   adjacent: Car | null,
-  safeGapThreshold: number
+  linkRadius: number,
+  carLength: number
 ): boolean {
   if (!adjacent) return false;
-  let gap = Math.abs(adjacent.state.position - car.position);
-  if (gap > Math.PI) gap = Math.PI * 2 - gap;
-  return gap < safeGapThreshold;
+  let gapAngle = Math.abs(adjacent.state.position - car.position);
+  if (gapAngle > Math.PI) gapAngle = Math.PI * 2 - gapAngle;
+
+  const linearGap = gapAngle * linkRadius;
+  // Safety buffer of 50% car length
+  return linearGap < carLength * 1.5;
 }
 
 export function shouldChangeLane(
@@ -110,6 +125,8 @@ export function shouldChangeLane(
   },
   speedLimit: number,
   numLanes: number,
+  radius: number,
+  carLength: number,
   hasReachedGoal: boolean = false
 ): "left" | "right" | null {
   const {
@@ -123,20 +140,24 @@ export function shouldChangeLane(
     rightAdjacent,
   } = neighbors;
 
-  const safeGapThreshold = 0.15;
-  const minFollowerGap = 8;
-
+  const minFollowerGap = carLength * 1.5;
   const needsToExit = car.targetExit !== null && hasReachedGoal;
   const isInOuterLane = car.lane === numLanes - 1;
   const isInInnerLane = car.lane === 0;
 
   if (needsToExit && !isInOuterLane) {
-    if (hasAdjacentCar(car, rightAdjacent, safeGapThreshold)) return null;
+    if (hasAdjacentCar(car, rightAdjacent, radius, carLength)) return null;
 
     if (rightFollower) {
-      let followerGap = car.position - rightFollower.state.position;
-      if (followerGap < 0) followerGap += Math.PI * 2;
-      if (followerGap * 50 < minFollowerGap) return null;
+      if (
+        calculateGap(
+          rightFollower.state.position,
+          car.position,
+          radius,
+          carLength
+        ) < minFollowerGap
+      )
+        return null;
     }
 
     const rightResult = evaluateLaneChange(
@@ -149,38 +170,33 @@ export function shouldChangeLane(
       gaps.current,
       gaps.right,
       speedLimit,
-      "right"
+      "right",
+      radius,
+      carLength
     );
     if (rightResult.safetyOk) return "right";
     return null;
   }
 
   if (!isInInnerLane && !needsToExit) {
-    if (hasAdjacentCar(car, leftAdjacent, safeGapThreshold)) {
+    if (hasAdjacentCar(car, leftAdjacent, radius, carLength)) {
+      // blocked
     } else {
+      let followerSafe = true;
       if (leftFollower) {
-        let followerGap = car.position - leftFollower.state.position;
-        if (followerGap < 0) followerGap += Math.PI * 2;
-        if (followerGap * 50 >= minFollowerGap) {
-          const leftResult = evaluateLaneChange(
-            car,
-            driver,
-            currentLeader,
-            currentFollower,
-            leftLeader,
-            leftFollower,
-            gaps.current,
-            gaps.left,
-            speedLimit,
-            "left"
-          );
-          if (leftResult.direction) return "left";
-
-          if (gaps.left > gaps.current * 1.3) {
-            return "left";
-          }
+        if (
+          calculateGap(
+            leftFollower.state.position,
+            car.position,
+            radius,
+            carLength
+          ) < minFollowerGap
+        ) {
+          followerSafe = false;
         }
-      } else {
+      }
+
+      if (followerSafe) {
         const leftResult = evaluateLaneChange(
           car,
           driver,
@@ -191,40 +207,36 @@ export function shouldChangeLane(
           gaps.current,
           gaps.left,
           speedLimit,
-          "left"
+          "left",
+          radius,
+          carLength
         );
         if (leftResult.direction) return "left";
 
-        if (gaps.left > gaps.current * 1.2) {
-          return "left";
-        }
+        if (gaps.left > gaps.current * 1.3) return "left";
       }
     }
   }
 
   if (!isInOuterLane && !needsToExit && currentLeader) {
     const currentGap = gaps.current;
-    if (currentGap < 20 && gaps.right > currentGap * 1.5) {
-      if (!hasAdjacentCar(car, rightAdjacent, safeGapThreshold)) {
+    if (currentGap < carLength * 3 && gaps.right > currentGap * 1.5) {
+      if (!hasAdjacentCar(car, rightAdjacent, radius, carLength)) {
+        let followerSafe = true;
         if (rightFollower) {
-          let followerGap = car.position - rightFollower.state.position;
-          if (followerGap < 0) followerGap += Math.PI * 2;
-          if (followerGap * 50 >= minFollowerGap) {
-            const rightResult = evaluateLaneChange(
-              car,
-              driver,
-              currentLeader,
-              currentFollower,
-              rightLeader,
-              rightFollower,
-              gaps.current,
-              gaps.right,
-              speedLimit,
-              "right"
-            );
-            if (rightResult.direction) return "right";
+          if (
+            calculateGap(
+              rightFollower.state.position,
+              car.position,
+              radius,
+              carLength
+            ) < minFollowerGap
+          ) {
+            followerSafe = false;
           }
-        } else {
+        }
+
+        if (followerSafe) {
           const rightResult = evaluateLaneChange(
             car,
             driver,
@@ -235,7 +247,9 @@ export function shouldChangeLane(
             gaps.current,
             gaps.right,
             speedLimit,
-            "right"
+            "right",
+            radius,
+            carLength
           );
           if (rightResult.direction) return "right";
         }

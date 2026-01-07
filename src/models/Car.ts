@@ -23,7 +23,12 @@ export class Car {
       B: 0.5,
       C: 1.5,
     };
-    const baseGoal = Math.PI * 2 * (1 + Math.random() * 2);
+    // Base goal in laps (1 to 3 laps)
+    const minLaps = 1 + Math.random() * 2;
+    // Approximate average circumference (Radius ~185 * 2 * PI) ~ 1160 pixels
+    const approxCircumference = 1160;
+
+    const baseGoal = approxCircumference * minLaps;
 
     this.state = {
       id: `car_${carIdCounter++}`,
@@ -43,7 +48,13 @@ export class Car {
     this.targetLane = lane;
   }
 
-  update(dt: number, leadCar: Car | null, speedLimit: number): void {
+  update(
+    dt: number,
+    leadCar: Car | null,
+    speedLimit: number,
+    radius: number,
+    carLength: number
+  ): void {
     let desiredSpeed = speedLimit * this.driver.desiredSpeedMultiplier;
 
     if (this.state.isYielding) {
@@ -54,7 +65,7 @@ export class Car {
     let approachingRate = 0;
 
     if (leadCar) {
-      gap = this.calculateGapTo(leadCar);
+      gap = this.calculateGapTo(leadCar, radius, carLength);
       approachingRate = this.state.velocity - leadCar.state.velocity;
     }
 
@@ -66,18 +77,23 @@ export class Car {
       this.driver
     );
 
-    this.state.acceleration = Math.max(
-      -6,
-      Math.min(this.state.acceleration, this.driver.maxAcceleration)
-    );
+    // Emergency braking if very close
+    if (gap < 5) {
+      this.state.acceleration = Math.min(-15, this.state.acceleration);
+    } else {
+      this.state.acceleration = Math.max(
+        -8,
+        Math.min(this.state.acceleration, this.driver.maxAcceleration)
+      );
+    }
 
     this.state.velocity += this.state.acceleration * dt;
     this.state.velocity = Math.max(0, this.state.velocity);
 
-    const angularVelocity = this.state.velocity / 50;
+    const angularVelocity = this.state.velocity / radius;
     const deltaPosition = angularVelocity * dt;
     this.state.position += deltaPosition;
-    this.state.distanceTraveled += Math.abs(deltaPosition);
+    this.state.distanceTraveled += Math.abs(deltaPosition * radius); // Linear distance
 
     if (this.state.position >= Math.PI * 2) {
       this.state.position -= Math.PI * 2;
@@ -94,10 +110,15 @@ export class Car {
     }
   }
 
-  calculateGapTo(other: Car): number {
-    let gap = other.state.position - this.state.position;
-    if (gap < 0) gap += Math.PI * 2;
-    return gap * 50 - 5;
+  calculateGapTo(other: Car, radius: number, carLength: number): number {
+    let deltaAngle = other.state.position - this.state.position;
+    if (deltaAngle < 0) deltaAngle += Math.PI * 2;
+
+    // Convert angular gap to linear distance
+    const linearDist = deltaAngle * radius;
+
+    // Subtract car length to get bumper-to-bumper gap
+    return Math.max(0, linearDist - carLength);
   }
 
   startLaneChange(direction: "left" | "right"): void {

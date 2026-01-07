@@ -53,6 +53,11 @@ export class Simulation {
     this.entranceQueues.clear();
     this.ramps = [];
     this.onStructureChange?.();
+
+    // Force UI update to clear metrics
+    if (this.onUpdate) {
+      this.onUpdate([], this.getMetrics(), []);
+    }
   }
 
   private loop = (): void => {

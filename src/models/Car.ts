@@ -10,6 +10,12 @@ export class Car {
   isChangingLane: boolean = false;
   laneChangeProgress: number = 0;
   targetLane: number = 0;
+  laneChangeDirection: "left" | "right" | null = null;
+
+  isDistracted: boolean = false;
+  distractionIntensity: number = 0;
+  private distractionTimer: number = 0;
+  private nextDistractionTime: number = 0;
 
   constructor(
     position: number,
@@ -59,13 +65,29 @@ export class Car {
   ): void {
     let desiredSpeed = speedLimit * this.driver.desiredSpeedMultiplier;
 
-    // Adjust desired speed based on DriverType quirks
-    if (this.state.driverType === "A") {
-      // Aggressive drivers want to go faster if open road
-      if (currentGap > 100) desiredSpeed *= 1.1;
-    } else if (this.state.driverType === "C") {
-      // Slow drivers fluctuate
-      desiredSpeed *= 0.9 + Math.random() * 0.2;
+    const timeSinceSpawn = performance.now() - this.state.lastLaneChangeTime;
+    const isInRampGracePeriod = timeSinceSpawn < 3000;
+
+    // Type B (Aggressive): Push for higher speed whenever possible
+    if (this.state.driverType === "B") {
+      if (currentGap > 50) desiredSpeed *= 1.15;
+    }
+
+    // Type C (Phone Checker + Sunday Driver): Distraction and erratic behavior
+    // But NOT during ramp grace period - let them accelerate first
+    if (this.state.driverType === "C" && !isInRampGracePeriod) {
+      this.updateDistraction(dt);
+
+      if (this.isDistracted) {
+        const oscillation = Math.sin(performance.now() * 0.005) * 0.3;
+        desiredSpeed *= 0.7 + oscillation;
+
+        if (Math.random() < 0.02) {
+          this.state.acceleration = -this.driver.comfortableBraking * 0.8;
+        }
+      }
+    } else if (this.state.driverType === "C" && isInRampGracePeriod) {
+      desiredSpeed = speedLimit;
     }
 
     // Removed Yielding Logic to prevent stuck cars
@@ -97,25 +119,24 @@ export class Car {
     );
 
     // --- GAP FILLER LOGIC ---
-    // If there is space, accelerate hard! Scale with speed limit.
-    const gapThreshold = speedLimit * 0.5; // e.g. 40 units at 80 speed limit
+    const gapThreshold = speedLimit * 0.5;
     if (gap > gapThreshold && this.state.velocity < desiredSpeed * 0.98) {
-      // General Boost
-      const boost = this.state.driverType === "A" ? 1.5 : 0.8;
+      let boost = 0.8;
+      if (this.state.driverType === "B") boost = 2.0;
+      else if (this.state.driverType === "C" && this.isDistracted) boost = 0.3;
+
       this.state.acceleration = Math.max(
         this.state.acceleration,
         this.driver.maxAcceleration * boost
       );
 
-      // --- POST-MERGE / LANE CHANGE TURBO ---
-      // If we recently merged or changed lanes (within 3 seconds), be very aggressive
       const timeSinceChange = performance.now() - this.state.lastLaneChangeTime;
       if (timeSinceChange < 3000) {
-        // Accelerate extremely hard if the road is clear
         if (gap > speedLimit * 0.8) {
+          const turboBoost = this.state.driverType === "B" ? 4.0 : 3.0;
           this.state.acceleration = Math.max(
             this.state.acceleration,
-            this.driver.maxAcceleration * 3.0 // Triple acceleration to get up to speed
+            this.driver.maxAcceleration * turboBoost
           );
         }
       }
@@ -147,16 +168,19 @@ export class Car {
     }
 
     if (this.isChangingLane) {
-      // Aggressive drivers change lanes faster
-      const changeSpeed = this.state.driverType === "A" ? 2.5 : 1.5;
+      let changeSpeed = 1.5;
+      if (this.state.driverType === "B") changeSpeed = 4.0;
+      else if (this.state.driverType === "C") changeSpeed = 0.8;
+
       this.laneChangeProgress += dt * changeSpeed;
 
       if (this.laneChangeProgress >= 1) {
         this.state.lane = this.targetLane;
         this.isChangingLane = false;
         this.laneChangeProgress = 0;
+        this.laneChangeDirection = null;
         this.state.lastLaneChangeTime = performance.now();
-        this.state.stuckTime = 0; // Reset frustration
+        this.state.stuckTime = 0;
       }
     }
   }
@@ -171,12 +195,13 @@ export class Car {
   startLaneChange(direction: "left" | "right"): void {
     if (this.isChangingLane) return;
 
-    // Cooldown check (prevent rapid switching)
     const now = performance.now();
-    if (now - this.state.lastLaneChangeTime < 2000) return; // 2s cooldown
+    const cooldown = this.state.driverType === "B" ? 800 : 2000;
+    if (now - this.state.lastLaneChangeTime < cooldown) return;
 
     this.isChangingLane = true;
     this.laneChangeProgress = 0;
+    this.laneChangeDirection = direction;
     this.targetLane =
       direction === "left" ? this.state.lane - 1 : this.state.lane + 1;
   }
@@ -189,6 +214,26 @@ export class Car {
 
   getSpeedRatio(speedLimit: number): number {
     return Math.min(1, this.state.velocity / speedLimit);
+  }
+
+  private updateDistraction(dt: number): void {
+    this.distractionTimer += dt;
+
+    if (!this.isDistracted) {
+      if (this.distractionTimer >= this.nextDistractionTime) {
+        this.isDistracted = true;
+        this.distractionIntensity = 0.5 + Math.random() * 0.5;
+        this.distractionTimer = 0;
+        this.nextDistractionTime = 1 + Math.random() * 1;
+      }
+    } else {
+      if (this.distractionTimer >= this.nextDistractionTime) {
+        this.isDistracted = false;
+        this.distractionIntensity = 0;
+        this.distractionTimer = 0;
+        this.nextDistractionTime = 6 + Math.random() * 6;
+      }
+    }
   }
 
   hasReachedGoal(): boolean {

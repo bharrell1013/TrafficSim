@@ -369,11 +369,23 @@ export class Simulation {
     }
 
     this.resolveCollisions(carsArray); // Prevent phasing
-    // Yielding logic removed
+    this.assignExitRamps(carsArray);
     this.handleRamps(dt);
     this.processEntranceQueues(dt);
     this.updateRampCars(dt);
     this.pruneExitedCars();
+  }
+
+  private assignExitRamps(cars: Car[]): void {
+    const exitRamps = this.ramps.filter((r) => r.type === "exit");
+    if (exitRamps.length === 0) return;
+
+    for (const car of cars) {
+      if (car.state.targetExit === null && car.hasReachedGoal()) {
+        car.state.targetExit =
+          exitRamps[Math.floor(Math.random() * exitRamps.length)].id;
+      }
+    }
   }
 
   private resolveCollisions(cars: Car[]): void {

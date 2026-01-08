@@ -69,7 +69,7 @@ export function evaluateLaneChange(
   const politenessLoss = driver.politeness * Math.abs(followerNewAcc);
   const incentive = accGain - politenessLoss + densityIncentive;
 
-  const threshold = 0.1;
+  const threshold = driver.type === "B" ? 0.02 : 0.1;
 
   return {
     direction: safetyOk && incentive > threshold ? direction : null,

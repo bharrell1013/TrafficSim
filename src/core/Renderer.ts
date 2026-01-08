@@ -197,7 +197,14 @@ export class Renderer {
 
       const rampRotation = ramp.angle + Math.PI / 2;
 
-      this.drawCarShape(x, y, rampRotation, rampCar.driverType, config, 1.0);
+      this.drawCarShapeSimple(
+        x,
+        y,
+        rampRotation,
+        rampCar.driverType,
+        config,
+        1.0
+      );
     }
   }
 
@@ -205,28 +212,84 @@ export class Renderer {
     const currentLane = car.getCurrentLane();
     const radius = config.baseRadius + currentLane * config.laneWidth;
 
-    const x = this.centerX + Math.cos(car.state.position) * radius;
-    const y = this.centerY + Math.sin(car.state.position) * radius;
+    let x = this.centerX + Math.cos(car.state.position) * radius;
+    let y = this.centerY + Math.sin(car.state.position) * radius;
+
+    // Frustration shake for Type B when stuck
+    if (car.state.driverType === "B" && car.state.stuckTime > 1) {
+      const shakeAmount = Math.min(car.state.stuckTime * 0.5, 2);
+      x += (Math.random() - 0.5) * shakeAmount;
+      y += (Math.random() - 0.5) * shakeAmount;
+    }
 
     const speedRatio = car.getSpeedRatio(config.speedLimit);
+    const isBraking = car.state.acceleration < -0.5;
+    const isDistracted = car.isDistracted;
+    const distractionIntensity = car.distractionIntensity;
 
-    this.drawCarShape(
+    this.drawCarShapeFull(
       x,
       y,
       car.state.position,
       car.state.driverType,
       config,
-      speedRatio
+      speedRatio,
+      isBraking,
+      car.isChangingLane,
+      car.laneChangeDirection,
+      isDistracted,
+      distractionIntensity,
+      car.state.stuckTime
     );
   }
 
-  private drawCarShape(
+  private drawCarShapeSimple(
     x: number,
     y: number,
     rotation: number,
     driverType: DriverType,
     config: SimulationConfig,
-    speedRatio: number
+    alpha: number
+  ): void {
+    this.ctx.save();
+    this.ctx.translate(x, y);
+    this.ctx.rotate(rotation + Math.PI / 2);
+    this.ctx.globalAlpha = alpha;
+
+    const width = config.carLength;
+    const height = config.carWidth;
+    const colors = this.getDriverTypeColors(driverType, 0.8);
+
+    this.ctx.beginPath();
+    if (driverType === "B") {
+      this.ctx.moveTo(width / 2, 0);
+      this.ctx.lineTo(width / 4, -height / 2);
+      this.ctx.lineTo(-width / 2, -height / 2);
+      this.ctx.lineTo(-width / 2, height / 2);
+      this.ctx.lineTo(width / 4, height / 2);
+      this.ctx.closePath();
+    } else {
+      this.ctx.roundRect(-width / 2, -height / 2, width, height, 3);
+    }
+    this.ctx.fillStyle = colors.primary;
+    this.ctx.fill();
+
+    this.ctx.restore();
+  }
+
+  private drawCarShapeFull(
+    x: number,
+    y: number,
+    rotation: number,
+    driverType: DriverType,
+    config: SimulationConfig,
+    speedRatio: number,
+    isBraking: boolean,
+    isChangingLane: boolean,
+    laneChangeDirection: "left" | "right" | null,
+    isDistracted: boolean,
+    distractionIntensity: number,
+    stuckTime: number
   ): void {
     this.ctx.save();
     this.ctx.translate(x, y);
@@ -235,7 +298,21 @@ export class Renderer {
     const width = config.carLength;
     const height = config.carWidth;
 
-    const colors = this.getDriverTypeColors(driverType, speedRatio);
+    if (isDistracted && driverType === "C") {
+      this.drawThinkingDots(width, height, distractionIntensity);
+    }
+
+    let colors = this.getDriverTypeColors(driverType, speedRatio);
+    if (driverType === "B" && stuckTime > 1) {
+      const frustrationLevel = Math.min(stuckTime / 3, 1);
+      const h = 15 - frustrationLevel * 15;
+      const brightness = 0.6 + speedRatio * 0.4;
+      colors = {
+        primary: `hsl(${h}, 90%, ${50 * brightness}%)`,
+        secondary: `hsl(${h}, 90%, ${35 * brightness}%)`,
+        border: `hsl(${h}, 90%, ${60 * brightness}%)`,
+      };
+    }
 
     const gradient = this.ctx.createLinearGradient(-width / 2, 0, width / 2, 0);
     gradient.addColorStop(0, colors.secondary);
@@ -243,7 +320,6 @@ export class Renderer {
     gradient.addColorStop(1, colors.secondary);
 
     this.ctx.beginPath();
-
     switch (driverType) {
       case "A":
         this.ctx.roundRect(-width / 2, -height / 2, width, height, 3);
@@ -263,7 +339,6 @@ export class Renderer {
 
     this.ctx.fillStyle = gradient;
     this.ctx.fill();
-
     this.ctx.strokeStyle = colors.border;
     this.ctx.lineWidth = 1;
     this.ctx.stroke();
@@ -272,6 +347,34 @@ export class Renderer {
     this.ctx.beginPath();
     this.ctx.arc(width / 3, 0, 2, 0, Math.PI * 2);
     this.ctx.fill();
+
+    if (isBraking) {
+      this.ctx.fillStyle = "rgba(255, 50, 50, 0.9)";
+      this.ctx.beginPath();
+      this.ctx.arc(-width / 2 + 2, -height / 4, 2.5, 0, Math.PI * 2);
+      this.ctx.arc(-width / 2 + 2, height / 4, 2.5, 0, Math.PI * 2);
+      this.ctx.fill();
+
+      this.ctx.shadowColor = "#ff3333";
+      this.ctx.shadowBlur = 8;
+      this.ctx.beginPath();
+      this.ctx.arc(-width / 2 + 2, 0, 3, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.shadowBlur = 0;
+    }
+
+    if (isChangingLane && laneChangeDirection) {
+      const blinkOn = Math.floor(performance.now() / 250) % 2 === 0;
+      if (blinkOn) {
+        this.ctx.fillStyle = "rgba(255, 180, 0, 0.9)";
+        const signalY =
+          laneChangeDirection === "right" ? -height / 2 - 2 : height / 2 + 2;
+        this.ctx.beginPath();
+        this.ctx.arc(width / 4, signalY, 2, 0, Math.PI * 2);
+        this.ctx.arc(-width / 4, signalY, 2, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
+    }
 
     this.ctx.restore();
   }
@@ -301,6 +404,34 @@ export class Renderer {
           secondary: `hsl(145, 60%, ${30 * brightness}%)`,
           border: `hsl(145, 60%, ${55 * brightness}%)`,
         };
+    }
+  }
+
+  private drawThinkingDots(
+    width: number,
+    _height: number,
+    intensity: number
+  ): void {
+    const time = performance.now() * 0.004;
+    const dotRadius = 1.5;
+    const spacing = 4;
+    const baseX = width / 2 + 8;
+
+    for (let i = 0; i < 3; i++) {
+      const phase = (time - i * 0.5) % (Math.PI * 2);
+      const scale = 0.5 + Math.max(0, Math.sin(phase)) * 0.5;
+      const alpha = 0.4 + scale * 0.6 * intensity;
+
+      this.ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+      this.ctx.beginPath();
+      this.ctx.arc(
+        baseX,
+        i * spacing - spacing,
+        dotRadius * scale + 0.5,
+        0,
+        Math.PI * 2
+      );
+      this.ctx.fill();
     }
   }
 

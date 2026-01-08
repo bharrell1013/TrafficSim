@@ -24,14 +24,14 @@ export class Controls {
   private render(): void {
     this.container.innerHTML = `
       <div class="controls-panel">
-        <h2>🎛️ Controls</h2>
+        <h2>Controls</h2>
         
         <div class="control-section">
           <h3>Simulation</h3>
           <div class="button-group">
-            <button id="btn-play" class="btn btn-primary">▶ Play</button>
-            <button id="btn-pause" class="btn btn-secondary">⏸ Pause</button>
-            <button id="btn-reset" class="btn btn-danger">↺ Reset</button>
+            <button id="btn-play" class="btn btn-primary">Play</button>
+            <button id="btn-pause" class="btn btn-secondary">Pause</button>
+            <button id="btn-reset" class="btn btn-danger">Reset</button>
           </div>
         </div>
         
@@ -53,17 +53,17 @@ export class Controls {
           <div class="checkbox-matrix">
             <label class="driver-checkbox type-a">
               <input type="checkbox" id="driver-a" checked>
-              <span class="driver-label">🚗 Type A</span>
+              <span class="driver-label">Type A</span>
               <span class="driver-desc">Average</span>
             </label>
             <label class="driver-checkbox type-b">
               <input type="checkbox" id="driver-b" checked>
-              <span class="driver-label">🏎️ Type B</span>
+              <span class="driver-label">Type B</span>
               <span class="driver-desc">Aggressive</span>
             </label>
             <label class="driver-checkbox type-c">
               <input type="checkbox" id="driver-c" checked>
-              <span class="driver-label">🐢 Type C</span>
+              <span class="driver-label">Type C</span>
               <span class="driver-desc">Slow/Erratic</span>
             </label>
           </div>
@@ -76,8 +76,8 @@ export class Controls {
             <button id="btn-remove-lane" class="btn btn-outline">− Remove Lane</button>
           </div>
           <div class="button-group vertical" style="margin-top: 10px;">
-            <button id="btn-place-entrance" class="btn btn-success">📍 Place Entrance Ramp</button>
-            <button id="btn-place-exit" class="btn btn-warning">📍 Place Exit Ramp</button>
+            <button id="btn-place-entrance" class="btn btn-success">Place Entrance Ramp</button>
+            <button id="btn-place-exit" class="btn btn-warning">Place Exit Ramp</button>
           </div>
           <p id="placement-hint" class="placement-hint" style="display: none;">Click on the circle edge to place the ramp</p>
         </div>

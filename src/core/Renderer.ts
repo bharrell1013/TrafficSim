@@ -43,6 +43,24 @@ export class Renderer {
     for (const car of cars) {
       this.drawCar(car, config);
     }
+
+    if (ramps.length === 0) {
+      this.drawInstructions();
+    }
+  }
+
+  private drawInstructions(): void {
+    this.ctx.save();
+    this.ctx.fillStyle = "#a1a1aa"; // text-secondary color
+    this.ctx.font = "14px Inter, sans-serif";
+    this.ctx.textAlign = "center";
+    this.ctx.textBaseline = "bottom";
+
+    const text =
+      "Tip: Use the controls menu to place Entrance and Exit Ramps, then hit Play to start the simulation";
+    // Draw at bottom with some padding
+    this.ctx.fillText(text, this.centerX, this.canvas.height - 20);
+    this.ctx.restore();
   }
 
   private drawRoad(config: SimulationConfig): void {

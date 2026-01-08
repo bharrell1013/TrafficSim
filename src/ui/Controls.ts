@@ -108,6 +108,7 @@ export class Controls {
       this.simulation.stop();
       this.simulation.reset();
       this.updatePlayPauseState(false);
+      this.updateLaneButtonState();
     });
 
     const spawnRateSlider = document.getElementById(

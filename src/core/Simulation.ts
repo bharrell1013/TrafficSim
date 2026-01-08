@@ -52,9 +52,9 @@ export class Simulation {
     this.rampCars = [];
     this.entranceQueues.clear();
     this.ramps = [];
+    this.config.numLanes = 3;
     this.onStructureChange?.();
 
-    // Force UI update to clear metrics
     if (this.onUpdate) {
       this.onUpdate([], this.getMetrics(), []);
     }
@@ -807,5 +807,6 @@ export class Simulation {
       );
       this.cars.set(car.state.id, car);
     }
+    this.onStructureChange?.();
   }
 }

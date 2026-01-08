@@ -731,9 +731,10 @@ export class Simulation {
   removeLane(): void {
     if (this.config.numLanes <= 1) return;
 
+    const removedLaneIdx = this.config.numLanes - 1;
     for (const car of this.cars.values()) {
-      if (car.state.lane >= this.config.numLanes - 1) {
-        car.state.lane = this.config.numLanes - 2;
+      if (car.state.lane >= removedLaneIdx) {
+        this.cars.delete(car.state.id);
       }
     }
 

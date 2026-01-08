@@ -139,13 +139,17 @@ export class Controls {
 
     document.getElementById("btn-add-lane")!.addEventListener("click", () => {
       this.simulation.addLane();
+      this.updateLaneButtonState();
     });
 
     document
       .getElementById("btn-remove-lane")!
       .addEventListener("click", () => {
         this.simulation.removeLane();
+        this.updateLaneButtonState();
       });
+
+    this.updateLaneButtonState();
 
     document
       .getElementById("btn-place-entrance")!
@@ -208,5 +212,12 @@ export class Controls {
     if ((document.getElementById("driver-c") as HTMLInputElement).checked)
       types.add("C");
     this.simulation.setDriverTypes(types);
+  }
+
+  private updateLaneButtonState(): void {
+    const removeLaneBtn = document.getElementById(
+      "btn-remove-lane"
+    ) as HTMLButtonElement;
+    removeLaneBtn.disabled = this.simulation.config.numLanes <= 1;
   }
 }

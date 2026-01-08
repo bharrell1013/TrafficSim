@@ -27,6 +27,20 @@ export class Renderer {
     this.centerY = this.canvas.height / 2;
   }
 
+  private getScaleFactor(config: SimulationConfig): number {
+    const outerRadius = this.getOuterRadius(config);
+    const rampLength = 60;
+    const padding = 40;
+    const requiredSize = (outerRadius + rampLength + padding) * 2;
+
+    const availableWidth = this.canvas.width;
+    const availableHeight = this.canvas.height;
+    const available = Math.min(availableWidth, availableHeight);
+
+    const scale = available / requiredSize;
+    return Math.min(scale, 1);
+  }
+
   render(
     cars: Car[],
     config: SimulationConfig,
@@ -36,6 +50,12 @@ export class Renderer {
     this.ctx.fillStyle = "#0a0a0f";
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+    const scale = this.getScaleFactor(config);
+    this.ctx.save();
+    this.ctx.translate(this.centerX, this.centerY);
+    this.ctx.scale(scale, scale);
+    this.ctx.translate(-this.centerX, -this.centerY);
+
     this.drawRoad(config);
     this.drawRamps(ramps, config);
     this.drawRampCars(rampCars, ramps, config);
@@ -43,6 +63,8 @@ export class Renderer {
     for (const car of cars) {
       this.drawCar(car, config);
     }
+
+    this.ctx.restore();
 
     if (ramps.length === 0) {
       this.drawInstructions();

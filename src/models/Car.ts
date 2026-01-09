@@ -90,19 +90,6 @@ export class Car {
       desiredSpeed = speedLimit;
     }
 
-    if (isInRampGracePeriod && this.state.velocity < speedLimit * 0.7) {
-      const minBoostAcceleration = speedLimit * 0.02;
-      this.state.acceleration = Math.max(
-        this.state.acceleration,
-        Math.max(minBoostAcceleration, this.driver.maxAcceleration * 2.0)
-      );
-    }
-
-    // Removed Yielding Logic to prevent stuck cars
-    // if (this.state.isYielding) {
-    //   desiredSpeed *= 0.5;
-    // }
-
     // Update Stuck Time
     if (this.state.velocity < desiredSpeed * 0.6 && currentGap < 50) {
       this.state.stuckTime += dt;
@@ -113,8 +100,6 @@ export class Car {
     // IDM Calculation
     let gap = currentGap;
 
-    // Tuning IDM for "Arcade" feel but keeping physics
-    // We artificially mask the gap for aggressive drivers to make them tailgait more
     let perceivedGap = gap;
     if (this.state.driverType === "A") perceivedGap *= 1.2;
 
@@ -150,12 +135,26 @@ export class Car {
       }
     }
 
-    // Hard clamps for collision avoidance (The "Don't Hit Stuff" rule)
+    // Hard clamps for collision avoidance
     if (gap < 3) {
-      this.state.acceleration = -this.driver.maxAcceleration * 1.5; // Emergency brake
-      this.state.velocity = Math.max(0, this.state.velocity - 2 * dt); // Reducing velocity directly but not zeroing
+      this.state.acceleration = -this.driver.maxAcceleration * 1.5;
+      this.state.velocity = Math.max(0, this.state.velocity - 2 * dt);
     } else if (gap < 10) {
-      this.state.acceleration = Math.min(this.state.acceleration, -1); // Braking
+      this.state.acceleration = Math.min(this.state.acceleration, -1);
+    }
+
+    // --- RAMP MERGE ACCELERATION OVERRIDE ---
+    // Applied AFTER all other calculations to guarantee acceleration for newly merged cars
+    if (
+      isInRampGracePeriod &&
+      this.state.velocity < speedLimit * 0.95 &&
+      gap > 15
+    ) {
+      const minMergeAcceleration = Math.max(2.0, speedLimit * 0.025);
+      this.state.acceleration = Math.max(
+        this.state.acceleration,
+        minMergeAcceleration
+      );
     }
 
     // Acceleration smoothing
@@ -246,5 +245,9 @@ export class Car {
 
   hasReachedGoal(): boolean {
     return this.state.distanceTraveled >= this.state.minTravelDistance;
+  }
+
+  isDesperate(): boolean {
+    return this.state.distanceTraveled >= this.state.minTravelDistance * 2;
   }
 }

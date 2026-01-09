@@ -84,9 +84,16 @@ export class Controls {
         
         <div class="control-section">
           <h3>Quick Actions</h3>
-          <div class="button-group vertical">
-            <button id="btn-spawn-10" class="btn btn-outline">Spawn 10 Cars</button>
-            <button id="btn-spawn-50" class="btn btn-outline">Spawn 50 Cars</button>
+          <div class="capacity-indicator" id="capacity-indicator">
+            <span>Cars: <strong id="car-count">0</strong> / <strong id="car-max">0</strong></span>
+          </div>
+          <div class="button-group vertical" style="margin-top: 10px;">
+            <button id="btn-spawn-10" class="btn btn-success">+ Spawn 10 Cars</button>
+            <button id="btn-spawn-50" class="btn btn-success">+ Spawn 50 Cars</button>
+          </div>
+          <div class="button-group vertical" style="margin-top: 10px;">
+            <button id="btn-despawn-10" class="btn btn-warning">− Despawn 10 Cars</button>
+            <button id="btn-despawn-50" class="btn btn-warning">− Despawn 50 Cars</button>
           </div>
         </div>
       </div>
@@ -166,10 +173,22 @@ export class Controls {
 
     document.getElementById("btn-spawn-10")!.addEventListener("click", () => {
       this.simulation.spawnInitialCars(10);
+      this.updateSpawnButtonState();
     });
 
     document.getElementById("btn-spawn-50")!.addEventListener("click", () => {
       this.simulation.spawnInitialCars(50);
+      this.updateSpawnButtonState();
+    });
+
+    document.getElementById("btn-despawn-10")!.addEventListener("click", () => {
+      this.simulation.despawnCars(10);
+      this.updateSpawnButtonState();
+    });
+
+    document.getElementById("btn-despawn-50")!.addEventListener("click", () => {
+      this.simulation.despawnCars(50);
+      this.updateSpawnButtonState();
     });
   }
 
@@ -220,5 +239,36 @@ export class Controls {
       "btn-remove-lane"
     ) as HTMLButtonElement;
     removeLaneBtn.disabled = this.simulation.config.numLanes <= 1;
+    this.updateSpawnButtonState();
+  }
+
+  updateSpawnButtonState(): void {
+    const spawn10Btn = document.getElementById(
+      "btn-spawn-10"
+    ) as HTMLButtonElement;
+    const spawn50Btn = document.getElementById(
+      "btn-spawn-50"
+    ) as HTMLButtonElement;
+    const despawn10Btn = document.getElementById(
+      "btn-despawn-10"
+    ) as HTMLButtonElement;
+    const despawn50Btn = document.getElementById(
+      "btn-despawn-50"
+    ) as HTMLButtonElement;
+    const carCount = document.getElementById("car-count");
+    const carMax = document.getElementById("car-max");
+
+    const currentCars = this.simulation.cars.size;
+    const maxCapacity = this.simulation.getMaxCapacity();
+    const atCapacity = this.simulation.isAtCapacity();
+    const isEmpty = currentCars === 0;
+
+    if (carCount) carCount.textContent = String(currentCars);
+    if (carMax) carMax.textContent = String(maxCapacity);
+
+    spawn10Btn.disabled = atCapacity;
+    spawn50Btn.disabled = atCapacity;
+    despawn10Btn.disabled = isEmpty;
+    despawn50Btn.disabled = isEmpty;
   }
 }

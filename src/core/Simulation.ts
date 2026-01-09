@@ -261,11 +261,13 @@ export class Simulation {
 
         if (car.state.stuckTime > frustrationThreshold) {
           wantToChange = true;
-          // Aggressive prefers left (inner), others just want out
           if (car.state.driverType === "A") {
-            preferredDirection = "left";
+            if (currentLaneId === 0) {
+              preferredDirection = "right";
+            } else {
+              preferredDirection = "left";
+            }
           } else {
-            // Pick random valid if desperate
             preferredDirection = Math.random() < 0.5 ? "left" : "right";
           }
         }
@@ -297,7 +299,7 @@ export class Simulation {
           // Check if left lane is faster? Simplified: Randomly check left
           if (Math.random() < 0.02) {
             wantToChange = true;
-            preferredDirection = "left";
+            preferredDirection = currentLaneId === 0 ? "right" : "left";
           }
         }
 
@@ -312,9 +314,9 @@ export class Simulation {
           )
             targetLane = currentLaneId + 1;
 
-          // If preferred failed (e.g. want left but at inner edge), try other if desperate
+          // If preferred direction is blocked (at edge), try opposite when desperate
           if (
-            targetLane !== -1 &&
+            targetLane === -1 &&
             car.state.stuckTime > frustrationThreshold * 2
           ) {
             if (currentLaneId > 0) targetLane = currentLaneId - 1;
@@ -384,6 +386,24 @@ export class Simulation {
       if (car.state.targetExit === null && car.hasReachedGoal()) {
         car.state.targetExit =
           exitRamps[Math.floor(Math.random() * exitRamps.length)].id;
+      }
+
+      if (car.isDesperate() && car.state.targetExit !== null) {
+        let nearestExit: (typeof exitRamps)[0] | null = null;
+        let nearestDist = Infinity;
+
+        for (const ramp of exitRamps) {
+          let dist = ramp.angle - car.state.position;
+          if (dist < 0) dist += Math.PI * 2;
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearestExit = ramp;
+          }
+        }
+
+        if (nearestExit && nearestExit.id !== car.state.targetExit) {
+          car.state.targetExit = nearestExit.id;
+        }
       }
     }
   }
@@ -511,6 +531,7 @@ export class Simulation {
     const queue = this.entranceQueues.get(ramp.id)!;
     const maxQueueSize = 5;
     if (queue.length >= maxQueueSize) return;
+    if (this.isAtCapacity()) return;
 
     const newCar: RampCar = {
       id: `ramp_car_${this.rampCarIdCounter++}`,
@@ -572,6 +593,7 @@ export class Simulation {
           car.state.velocity,
           this.config.speedLimit * 0.5
         );
+        car.state.acceleration = 2.0;
         this.cars.set(car.state.id, car);
 
         // Remove from rampCars and Queue immediately
@@ -694,7 +716,9 @@ export class Simulation {
         let dist = Math.abs(car.state.position - exitRamp.angle);
         if (dist > Math.PI) dist = Math.PI * 2 - dist;
 
-        if (dist < 0.1) {
+        const exitThreshold = car.isDesperate() ? 0.25 : 0.1;
+
+        if (dist < exitThreshold) {
           this.cars.delete(id);
           this.rampCars.push({
             id: `ramp_car_${this.rampCarIdCounter++}`,
@@ -769,6 +793,31 @@ export class Simulation {
     this.config.speedLimit = limit;
   }
 
+  getMaxCapacity(): number {
+    let totalCapacity = 0;
+    for (let lane = 0; lane < this.config.numLanes; lane++) {
+      const laneRadius = this.config.baseRadius + lane * this.config.laneWidth;
+      const circumference = 2 * Math.PI * laneRadius;
+      const carsPerLane = Math.floor(
+        circumference / (this.config.carLength * 2.5)
+      );
+      totalCapacity += carsPerLane;
+    }
+    return totalCapacity;
+  }
+
+  getRemainingCapacity(): number {
+    const queuedCars = Array.from(this.entranceQueues.values()).reduce(
+      (sum, q) => sum + q.length,
+      0
+    );
+    return Math.max(0, this.getMaxCapacity() - this.cars.size - queuedCars);
+  }
+
+  isAtCapacity(): boolean {
+    return this.getRemainingCapacity() <= 0;
+  }
+
   getMetrics(): SimulationMetrics {
     const now = Date.now();
     const oneMinuteAgo = now - 60000;
@@ -795,8 +844,12 @@ export class Simulation {
   }
 
   spawnInitialCars(count: number): void {
-    for (let i = 0; i < count; i++) {
-      const position = (i / count) * Math.PI * 2;
+    const remaining = this.getRemainingCapacity();
+    const toSpawn = Math.min(count, remaining);
+    if (toSpawn <= 0) return;
+
+    for (let i = 0; i < toSpawn; i++) {
+      const position = (i / toSpawn) * Math.PI * 2;
       const lane = Math.floor(Math.random() * this.config.numLanes);
       const types: DriverType[] = Array.from(this.allowedDriverTypes);
       const driverType = types[Math.floor(Math.random() * types.length)] || "A";
@@ -809,6 +862,18 @@ export class Simulation {
         null
       );
       this.cars.set(car.state.id, car);
+    }
+    this.onStructureChange?.();
+  }
+
+  despawnCars(count: number): void {
+    const carIds = Array.from(this.cars.keys());
+    const toDespawn = Math.min(count, carIds.length);
+
+    for (let i = 0; i < toDespawn; i++) {
+      const randomIndex = Math.floor(Math.random() * carIds.length);
+      const id = carIds.splice(randomIndex, 1)[0];
+      this.cars.delete(id);
     }
     this.onStructureChange?.();
   }

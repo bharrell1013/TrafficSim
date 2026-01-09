@@ -408,6 +408,21 @@ h3 {
   text-align: center;
 }
 
+.capacity-indicator {
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.capacity-indicator strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .metrics-grid {
   display: grid;
   grid-template-columns: 1fr;

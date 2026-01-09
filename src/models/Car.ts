@@ -90,6 +90,14 @@ export class Car {
       desiredSpeed = speedLimit;
     }
 
+    if (isInRampGracePeriod && this.state.velocity < speedLimit * 0.7) {
+      const minBoostAcceleration = speedLimit * 0.02;
+      this.state.acceleration = Math.max(
+        this.state.acceleration,
+        Math.max(minBoostAcceleration, this.driver.maxAcceleration * 2.0)
+      );
+    }
+
     // Removed Yielding Logic to prevent stuck cars
     // if (this.state.isYielding) {
     //   desiredSpeed *= 0.5;

@@ -567,8 +567,11 @@ export class Simulation {
           frontCar.driverType,
           targetExit
         );
-        // Trigger post-merge boost
         car.state.lastLaneChangeTime = performance.now();
+        car.state.velocity = Math.max(
+          car.state.velocity,
+          this.config.speedLimit * 0.5
+        );
         this.cars.set(car.state.id, car);
 
         // Remove from rampCars and Queue immediately

@@ -3,6 +3,7 @@ import { Simulation } from "./core/Simulation";
 import { Renderer } from "./core/Renderer";
 import { Dashboard } from "./ui/Dashboard";
 import { Controls } from "./ui/Controls";
+import { Tutorial } from "./ui/Tutorial";
 import type { RampPlacementMode } from "./ui/Controls";
 import type { SimulationConfig } from "./models/types";
 
@@ -22,6 +23,7 @@ const canvas = document.getElementById(
 const renderer = new Renderer(canvas);
 const dashboard = new Dashboard("dashboard-container");
 const controls = new Controls("controls-container", simulation);
+new Tutorial(); // Initialize tutorial overlay
 
 let currentPlacementMode: RampPlacementMode = "none";
 

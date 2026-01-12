@@ -4,8 +4,12 @@ import { Renderer } from "./core/Renderer";
 import { Dashboard } from "./ui/Dashboard";
 import { Controls } from "./ui/Controls";
 import { Tutorial } from "./ui/Tutorial";
+import { MobileBarrier } from "./ui/MobileBarrier";
 import type { RampPlacementMode } from "./ui/Controls";
 import type { SimulationConfig } from "./models/types";
+
+// Check for mobile device detection immediately
+new MobileBarrier();
 
 const config: SimulationConfig = {
   speedLimit: 80,

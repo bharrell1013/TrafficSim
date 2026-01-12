@@ -1,10 +1,10 @@
-# Traffic Flow Laboratory 🚗💨
+# Traffic Flow Laboratory
 
 A high-performance traffic simulation experiment built with TypeScript and HTML5 Canvas. This project models realistic traffic flow on a circular highway using advanced traffic physics models to simulate emergent behaviors like traffic waves, tailgating, and lane-change dynamics.
 
 **[Live Demo](https://bharrell1013.github.io/TrafficSim/)**
 
-## 🏗️ Project Architecture
+## Project Architecture
 
 The project is structured to separate core simulation logic from physics models and UI rendering:
 
@@ -25,7 +25,7 @@ src/
     └── Dashboard.ts   # Real-time metrics display
 ```
 
-## 🧠 Physics Models
+## Physics Models
 
 ### IDM (Intelligent Driver Model)
 
@@ -47,7 +47,7 @@ The **MOBIL** model (`src/physics/MOBIL.ts`) determines when a car should change
 3.  **Politeness**: "Will I force the new follower to brake hard?"
 4.  **Incentive**: Lane density logic encourages cars to move to less crowded lanes.
 
-## 🎭 Driver Personalities
+## Driver Personalities
 
 The simulation features three distinct driver profiles to create diverse traffic dynamics:
 
@@ -73,7 +73,7 @@ The simulation features three distinct driver profiles to create diverse traffic
 - **Speed**: Drives significantly below the speed limit (~55%).
 - **Representation**: Boxier, slower-looking vehicle.
 
-## 🛣️ Features
+## Features
 
 - **Circular Highway**: Infinite road loop allowing for continuous flow analysis.
 - **Dynamic Infrastructure**:
